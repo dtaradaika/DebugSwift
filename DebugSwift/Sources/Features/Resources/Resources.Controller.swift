@@ -136,7 +136,8 @@ extension ResourcesViewController: UITableViewDataSource, UITableViewDelegate {
             let viewModel = ResourcesHTTPCookiesViewModel()
             controller = ResourcesGenericController(viewModel: viewModel)
         case .database:
-            controller = DatabaseBrowserViewController()
+            showAlert(with: "TODO")
+            //controller = DatabaseBrowserViewController()
         }
         if let controller {
             navigationController?.pushViewController(controller, animated: true)
