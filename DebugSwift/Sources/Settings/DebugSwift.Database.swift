@@ -27,9 +27,35 @@ public final class StaticDatabaseKeyProvider: DatabaseKeyProvider, @unchecked Se
     }
 }
 
+/// Database viewer UI mode
+public enum DatabaseViewerMode: String, CaseIterable, Sendable {
+    case classic = "classic"
+    case modern = "modern"
+
+    public var displayName: String {
+        switch self {
+        case .classic:
+            return "Classic"
+        case .modern:
+            return "Modern (QA Enhanced)"
+        }
+    }
+
+    public var description: String {
+        switch self {
+        case .classic:
+            return "Traditional table-based view with basic functionality"
+        case .modern:
+            return "Enhanced grid view with filters, export, and QA tools"
+        }
+    }
+}
+
 extension DebugSwift {
     public final class Database: @unchecked Sendable {
         public static let shared = Database()
+
+        private static let viewerModeKey = "DebugSwift.Database.ViewerMode"
 
         private init() {}
 
@@ -160,6 +186,31 @@ extension DebugSwift {
                 return nil
             }
             return config.keyProvider.provideKey()
+        }
+
+        // MARK: - Viewer Mode Settings
+
+        /// Current database viewer UI mode
+        public var viewerMode: DatabaseViewerMode {
+            get {
+                if let rawValue = UserDefaults.standard.string(forKey: Self.viewerModeKey),
+                   let mode = DatabaseViewerMode(rawValue: rawValue) {
+                    return mode
+                }
+                return .modern // Default to modern for better QA experience
+            }
+            set {
+                UserDefaults.standard.set(newValue.rawValue, forKey: Self.viewerModeKey)
+            }
+        }
+
+        /// Toggle between classic and modern viewer modes
+        /// - Returns: The new viewer mode after toggle
+        @discardableResult
+        public func toggleViewerMode() -> DatabaseViewerMode {
+            let newMode: DatabaseViewerMode = viewerMode == .classic ? .modern : .classic
+            viewerMode = newMode
+            return newMode
         }
     }
 }

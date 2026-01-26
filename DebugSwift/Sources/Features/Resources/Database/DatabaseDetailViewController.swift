@@ -43,6 +43,15 @@ final class DatabaseDetailViewController: BaseController {
             action: #selector(exportDatabase)
         )
     }()
+
+    private lazy var viewerModeButton: UIBarButtonItem = {
+        UIBarButtonItem(
+            image: UIImage(systemName: "rectangle.split.3x3"),
+            style: .plain,
+            target: self,
+            action: #selector(showViewerModeSelector)
+        )
+    }()
     
     // MARK: - Initialization
     
@@ -84,12 +93,20 @@ private extension DatabaseDetailViewController {
     
     func setupNavigation() {
         title = database.name
-        
+
         if database.type == .sqlite {
-            navigationItem.rightBarButtonItems = [exportButton, queryButton]
+            navigationItem.rightBarButtonItems = [exportButton, queryButton, viewerModeButton]
         } else {
-            navigationItem.rightBarButtonItem = exportButton
+            navigationItem.rightBarButtonItems = [exportButton, viewerModeButton]
         }
+
+        updateViewerModeIcon()
+    }
+
+    func updateViewerModeIcon() {
+        let mode = DebugSwift.Database.shared.viewerMode
+        let iconName = mode == .modern ? "rectangle.split.3x3.fill" : "rectangle.split.3x3"
+        viewerModeButton.image = UIImage(systemName: iconName)
     }
     
     func loadTables() {
@@ -112,6 +129,20 @@ private extension DatabaseDetailViewController {
         let exportVC = DatabaseExportViewController(database: database)
         let navController = UINavigationController(rootViewController: exportVC)
         present(navController, animated: true)
+    }
+
+    @objc func showViewerModeSelector() {
+        let currentMode = DebugSwift.Database.shared.viewerMode
+        let alert = DatabaseViewerFactory.makeViewerModeSelector(currentMode: currentMode) { [weak self] selectedMode in
+            DebugSwift.Database.shared.viewerMode = selectedMode
+            self?.updateViewerModeIcon()
+        }
+
+        if let popover = alert.popoverPresentationController {
+            popover.barButtonItem = viewerModeButton
+        }
+
+        present(alert, animated: true)
     }
 }
 
@@ -150,9 +181,9 @@ extension DatabaseDetailViewController: UITableViewDataSource {
 extension DatabaseDetailViewController: UITableViewDelegate {
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        
+
         let table = tables[indexPath.row]
-        let tableContentVC = DatabaseTableViewController(
+        let tableContentVC = DatabaseViewerFactory.makeTableViewer(
             database: database,
             table: table
         )

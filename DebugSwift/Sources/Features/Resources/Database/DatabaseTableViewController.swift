@@ -73,6 +73,15 @@ final class DatabaseTableViewController: BaseController {
             action: #selector(addNewRow)
         )
     }()
+
+    private lazy var switchUIButton: UIBarButtonItem = {
+        UIBarButtonItem(
+            image: UIImage(systemName: "rectangle.split.3x3"),
+            style: .plain,
+            target: self,
+            action: #selector(switchToModernUI)
+        )
+    }()
     
     private lazy var headerView: DatabaseTableHeaderView = {
         let header = DatabaseTableHeaderView()
@@ -160,9 +169,24 @@ private extension DatabaseTableViewController {
         title = table.name
         navigationItem.searchController = searchController
         definesPresentationContext = true
-        
+
         if database.type == .sqlite {
-            navigationItem.rightBarButtonItems = [editButton, addButton]
+            navigationItem.rightBarButtonItems = [editButton, addButton, switchUIButton]
+        } else {
+            navigationItem.rightBarButtonItem = switchUIButton
+        }
+    }
+
+    @objc func switchToModernUI() {
+        DebugSwift.Database.shared.viewerMode = .modern
+
+        let modernVC = ModernDatabaseTableViewController(database: database, table: table)
+
+        guard let navController = navigationController else { return }
+        var viewControllers = navController.viewControllers
+        if let index = viewControllers.firstIndex(of: self) {
+            viewControllers[index] = modernVC
+            navController.setViewControllers(viewControllers, animated: false)
         }
     }
     
