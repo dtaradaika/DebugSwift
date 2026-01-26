@@ -23,59 +23,161 @@ final class ModernDatabaseTableViewController: BaseController {
     private var sortAscending = true
     private var columnFilters: [String: String] = [:]
     private var hiddenColumns: Set<String> = []
-    private var selectedRows: Set<Int> = []
+    private let columnWidth: CGFloat = 140
 
     // MARK: - UI Components
 
-    private lazy var collectionView: UICollectionView = {
-        let layout = createGridLayout()
-        let collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
-        collection.translatesAutoresizingMaskIntoConstraints = false
-        collection.delegate = self
-        collection.dataSource = self
-        collection.backgroundColor = .systemBackground
-        collection.allowsMultipleSelection = true
-        collection.register(ModernDataCell.self, forCellWithReuseIdentifier: ModernDataCell.reuseId)
-        collection.register(
-            ModernHeaderCell.self,
-            forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
-            withReuseIdentifier: ModernHeaderCell.reuseId
-        )
-        return collection
+    private lazy var mainScrollView: UIScrollView = {
+        let scrollView = UIScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.showsHorizontalScrollIndicator = true
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.bounces = true
+        scrollView.alwaysBounceHorizontal = true
+        scrollView.delegate = self
+        return scrollView
     }()
 
-    private lazy var toolbarView: ModernToolbarView = {
-        let toolbar = ModernToolbarView()
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.delegate = self
-        return toolbar
+    private lazy var contentStackView: UIStackView = {
+        let stack = UIStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .vertical
+        stack.spacing = 0
+        return stack
     }()
 
-    private lazy var filterBar: ModernFilterBarView = {
-        let bar = ModernFilterBarView()
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.delegate = self
-        bar.isHidden = true
-        return bar
+    private lazy var headerScrollView: UIScrollView = {
+        let scrollView = UIScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.isUserInteractionEnabled = false
+        return scrollView
+    }()
+
+    private lazy var headerStackView: UIStackView = {
+        let stack = UIStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.spacing = 0
+        stack.distribution = .fill
+        return stack
+    }()
+
+    private lazy var tableView: UITableView = {
+        let table = UITableView(frame: .zero, style: .plain)
+        table.translatesAutoresizingMaskIntoConstraints = false
+        table.delegate = self
+        table.dataSource = self
+        table.register(ModernGridRowCell.self, forCellReuseIdentifier: ModernGridRowCell.reuseId)
+        table.separatorStyle = .singleLine
+        table.separatorInset = .zero
+        table.rowHeight = 50
+        return table
+    }()
+
+    private lazy var toolbarView: UIView = {
+        let view = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.backgroundColor = .systemGray6
+        return view
     }()
 
     private lazy var statsLabel: UILabel = {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        label.font = .systemFont(ofSize: 14, weight: .medium)
         label.textColor = .secondaryLabel
+        return label
+    }()
+
+    private lazy var filterButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: "line.3.horizontal.decrease.circle"), for: .normal)
+        button.addTarget(self, action: #selector(toggleFilterBar), for: .touchUpInside)
+        return button
+    }()
+
+    private lazy var refreshButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: "arrow.clockwise"), for: .normal)
+        button.addTarget(self, action: #selector(refreshData), for: .touchUpInside)
+        return button
+    }()
+
+    private lazy var filterBar: UIView = {
+        let view = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.backgroundColor = .systemGray6
+        view.isHidden = true
+        return view
+    }()
+
+    private lazy var columnPickerButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setTitle("Column", for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 14)
+        button.showsMenuAsPrimaryAction = true
+        return button
+    }()
+
+    private lazy var filterTextField: UITextField = {
+        let field = UITextField()
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.placeholder = "Filter value..."
+        field.borderStyle = .roundedRect
+        field.font = .systemFont(ofSize: 14)
+        field.clearButtonMode = .whileEditing
+        field.addTarget(self, action: #selector(filterTextChanged), for: .editingChanged)
+        return field
+    }()
+
+    private lazy var clearFilterButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
+        button.tintColor = .systemGray
+        button.addTarget(self, action: #selector(clearFilters), for: .touchUpInside)
+        return button
+    }()
+
+    private lazy var pageControl: UIView = {
+        let view = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        return view
+    }()
+
+    private lazy var prevButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: "chevron.left"), for: .normal)
+        button.addTarget(self, action: #selector(prevPage), for: .touchUpInside)
+        return button
+    }()
+
+    private lazy var pageLabel: UILabel = {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
         label.textAlignment = .center
         return label
     }()
 
-    private lazy var pageControl: ModernPageControl = {
-        let control = ModernPageControl()
-        control.translatesAutoresizingMaskIntoConstraints = false
-        control.delegate = self
-        return control
+    private lazy var nextButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: "chevron.right"), for: .normal)
+        button.addTarget(self, action: #selector(nextPage), for: .touchUpInside)
+        return button
     }()
 
     private var filterBarHeightConstraint: NSLayoutConstraint?
+    private var contentWidthConstraint: NSLayoutConstraint?
+    private var headerWidthConstraint: NSLayoutConstraint?
+    private var selectedFilterColumn: String?
 
     // MARK: - Initialization
 
@@ -96,48 +198,6 @@ final class ModernDatabaseTableViewController: BaseController {
         setup()
         loadTableData()
     }
-
-    // MARK: - Layout
-
-    private func createGridLayout() -> UICollectionViewCompositionalLayout {
-        return UICollectionViewCompositionalLayout { [weak self] sectionIndex, environment in
-            guard let self = self else { return nil }
-
-            let visibleColumnCount = max(1, self.columns.count - self.hiddenColumns.count)
-            let columnWidth: CGFloat = 140
-
-            let itemSize = NSCollectionLayoutSize(
-                widthDimension: .absolute(columnWidth),
-                heightDimension: .absolute(50)
-            )
-            let item = NSCollectionLayoutItem(layoutSize: itemSize)
-
-            let groupSize = NSCollectionLayoutSize(
-                widthDimension: .absolute(CGFloat(visibleColumnCount) * columnWidth),
-                heightDimension: .absolute(50)
-            )
-
-            // Use the subitem array API which is available on older iOS versions
-            let subitems = Array(repeating: item, count: visibleColumnCount)
-            let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize, subitems: subitems)
-
-            let section = NSCollectionLayoutSection(group: group)
-            section.orthogonalScrollingBehavior = .continuous
-
-            let headerSize = NSCollectionLayoutSize(
-                widthDimension: .absolute(CGFloat(visibleColumnCount) * columnWidth),
-                heightDimension: .absolute(60)
-            )
-            let header = NSCollectionLayoutBoundarySupplementaryItem(
-                layoutSize: headerSize,
-                elementKind: UICollectionView.elementKindSectionHeader,
-                alignment: .top
-            )
-            section.boundarySupplementaryItems = [header]
-
-            return section
-        }
-    }
 }
 
 // MARK: - Setup
@@ -146,42 +206,112 @@ private extension ModernDatabaseTableViewController {
     func setup() {
         setupViews()
         setupNavigation()
-        setupGestures()
     }
 
     func setupViews() {
+        // Toolbar
         view.addSubview(toolbarView)
+        toolbarView.addSubview(statsLabel)
+        toolbarView.addSubview(filterButton)
+        toolbarView.addSubview(refreshButton)
+
+        // Filter bar
         view.addSubview(filterBar)
-        view.addSubview(collectionView)
-        view.addSubview(statsLabel)
+        filterBar.addSubview(columnPickerButton)
+        filterBar.addSubview(filterTextField)
+        filterBar.addSubview(clearFilterButton)
+
+        // Header
+        view.addSubview(headerScrollView)
+        headerScrollView.addSubview(headerStackView)
+
+        // Main content
+        view.addSubview(mainScrollView)
+        mainScrollView.addSubview(tableView)
+
+        // Page control
         view.addSubview(pageControl)
+        pageControl.addSubview(prevButton)
+        pageControl.addSubview(pageLabel)
+        pageControl.addSubview(nextButton)
 
         filterBarHeightConstraint = filterBar.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
+            // Toolbar
             toolbarView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             toolbarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             toolbarView.heightAnchor.constraint(equalToConstant: 44),
 
+            statsLabel.leadingAnchor.constraint(equalTo: toolbarView.leadingAnchor, constant: 16),
+            statsLabel.centerYAnchor.constraint(equalTo: toolbarView.centerYAnchor),
+
+            refreshButton.trailingAnchor.constraint(equalTo: toolbarView.trailingAnchor, constant: -16),
+            refreshButton.centerYAnchor.constraint(equalTo: toolbarView.centerYAnchor),
+            refreshButton.widthAnchor.constraint(equalToConstant: 44),
+
+            filterButton.trailingAnchor.constraint(equalTo: refreshButton.leadingAnchor, constant: -8),
+            filterButton.centerYAnchor.constraint(equalTo: toolbarView.centerYAnchor),
+            filterButton.widthAnchor.constraint(equalToConstant: 44),
+
+            // Filter bar
             filterBar.topAnchor.constraint(equalTo: toolbarView.bottomAnchor),
             filterBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             filterBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             filterBarHeightConstraint!,
 
-            collectionView.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
-            collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            columnPickerButton.leadingAnchor.constraint(equalTo: filterBar.leadingAnchor, constant: 8),
+            columnPickerButton.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            columnPickerButton.widthAnchor.constraint(equalToConstant: 100),
 
-            statsLabel.topAnchor.constraint(equalTo: collectionView.bottomAnchor, constant: 4),
-            statsLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            statsLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            filterTextField.leadingAnchor.constraint(equalTo: columnPickerButton.trailingAnchor, constant: 8),
+            filterTextField.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            filterTextField.heightAnchor.constraint(equalToConstant: 34),
 
-            pageControl.topAnchor.constraint(equalTo: statsLabel.bottomAnchor, constant: 4),
+            clearFilterButton.leadingAnchor.constraint(equalTo: filterTextField.trailingAnchor, constant: 8),
+            clearFilterButton.trailingAnchor.constraint(equalTo: filterBar.trailingAnchor, constant: -8),
+            clearFilterButton.centerYAnchor.constraint(equalTo: filterBar.centerYAnchor),
+            clearFilterButton.widthAnchor.constraint(equalToConstant: 34),
+
+            // Header scroll view
+            headerScrollView.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
+            headerScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headerScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            headerScrollView.heightAnchor.constraint(equalToConstant: 50),
+
+            headerStackView.topAnchor.constraint(equalTo: headerScrollView.topAnchor),
+            headerStackView.leadingAnchor.constraint(equalTo: headerScrollView.leadingAnchor),
+            headerStackView.bottomAnchor.constraint(equalTo: headerScrollView.bottomAnchor),
+            headerStackView.heightAnchor.constraint(equalTo: headerScrollView.heightAnchor),
+
+            // Main scroll view
+            mainScrollView.topAnchor.constraint(equalTo: headerScrollView.bottomAnchor),
+            mainScrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            mainScrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            mainScrollView.bottomAnchor.constraint(equalTo: pageControl.topAnchor),
+
+            tableView.topAnchor.constraint(equalTo: mainScrollView.topAnchor),
+            tableView.leadingAnchor.constraint(equalTo: mainScrollView.leadingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: mainScrollView.bottomAnchor),
+            tableView.heightAnchor.constraint(equalTo: mainScrollView.heightAnchor),
+
+            // Page control
             pageControl.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             pageControl.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             pageControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
-            pageControl.heightAnchor.constraint(equalToConstant: 44)
+            pageControl.heightAnchor.constraint(equalToConstant: 44),
+
+            prevButton.leadingAnchor.constraint(equalTo: pageControl.leadingAnchor, constant: 16),
+            prevButton.centerYAnchor.constraint(equalTo: pageControl.centerYAnchor),
+            prevButton.widthAnchor.constraint(equalToConstant: 44),
+
+            pageLabel.centerXAnchor.constraint(equalTo: pageControl.centerXAnchor),
+            pageLabel.centerYAnchor.constraint(equalTo: pageControl.centerYAnchor),
+
+            nextButton.trailingAnchor.constraint(equalTo: pageControl.trailingAnchor, constant: -16),
+            nextButton.centerYAnchor.constraint(equalTo: pageControl.centerYAnchor),
+            nextButton.widthAnchor.constraint(equalToConstant: 44)
         ])
     }
 
@@ -196,18 +326,13 @@ private extension ModernDatabaseTableViewController {
         )
 
         let switchUIButton = UIBarButtonItem(
-            image: UIImage(systemName: "rectangle.split.3x3"),
+            image: UIImage(systemName: "list.bullet.rectangle"),
             style: .plain,
             target: self,
             action: #selector(switchToClassicUI)
         )
 
         navigationItem.rightBarButtonItems = [moreButton, switchUIButton]
-    }
-
-    func setupGestures() {
-        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
-        collectionView.addGestureRecognizer(longPress)
     }
 
     func loadTableData() {
@@ -224,13 +349,73 @@ private extension ModernDatabaseTableViewController {
         allRows = result.rows
         applyFilters()
 
-        toolbarView.configure(rowCount: table.rowCount, columnCount: columns.count)
-        filterBar.configure(with: columns)
+        setupHeader()
+        setupColumnPicker()
         updateStats()
         updatePageControl()
+        updateContentWidth()
 
-        collectionView.collectionViewLayout = createGridLayout()
-        collectionView.reloadData()
+        tableView.reloadData()
+    }
+
+    func setupHeader() {
+        headerStackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        headerScrollView.backgroundColor = .systemGray5
+
+        let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
+
+        for column in visibleColumns {
+            let button = UIButton(type: .system)
+            button.translatesAutoresizingMaskIntoConstraints = false
+
+            var title = column
+            if column == sortColumn {
+                title += sortAscending ? " ↑" : " ↓"
+            }
+
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            button.contentHorizontalAlignment = .left
+            button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+            button.addTarget(self, action: #selector(headerColumnTapped(_:)), for: .touchUpInside)
+
+            button.widthAnchor.constraint(equalToConstant: columnWidth).isActive = true
+            headerStackView.addArrangedSubview(button)
+        }
+
+        headerWidthConstraint?.isActive = false
+        headerWidthConstraint = headerStackView.widthAnchor.constraint(equalToConstant: CGFloat(visibleColumns.count) * columnWidth)
+        headerWidthConstraint?.isActive = true
+    }
+
+    func setupColumnPicker() {
+        guard !columns.isEmpty else { return }
+
+        if selectedFilterColumn == nil {
+            selectedFilterColumn = columns.first
+            columnPickerButton.setTitle(columns.first, for: .normal)
+        }
+
+        let actions = columns.map { column in
+            UIAction(title: column, state: column == selectedFilterColumn ? .on : .off) { [weak self] _ in
+                self?.selectedFilterColumn = column
+                self?.columnPickerButton.setTitle(column, for: .normal)
+                self?.setupColumnPicker()
+            }
+        }
+        columnPickerButton.menu = UIMenu(children: actions)
+    }
+
+    func updateContentWidth() {
+        let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
+        let width = CGFloat(visibleColumns.count) * columnWidth
+
+        contentWidthConstraint?.isActive = false
+        contentWidthConstraint = tableView.widthAnchor.constraint(equalToConstant: width)
+        contentWidthConstraint?.isActive = true
+
+        mainScrollView.contentSize = CGSize(width: width, height: 0)
     }
 
     func applyFilters() {
@@ -257,7 +442,7 @@ private extension ModernDatabaseTableViewController {
                 return true
             }
         }
-        collectionView.reloadData()
+        tableView.reloadData()
         updateStats()
     }
 
@@ -265,29 +450,90 @@ private extension ModernDatabaseTableViewController {
         let totalRows = table.rowCount
         let showing = filteredRows.count
         let filtered = columnFilters.isEmpty ? "" : " (filtered)"
-        let page = currentPage + 1
-        let totalPages = max(1, (totalRows + pageSize - 1) / pageSize)
 
-        statsLabel.text = "Showing \(showing) of \(totalRows) rows\(filtered) | Page \(page)/\(totalPages)"
+        statsLabel.text = "\(showing)/\(totalRows) rows\(filtered) • \(columns.count) cols"
     }
 
     func updatePageControl() {
         let totalPages = max(1, (table.rowCount + pageSize - 1) / pageSize)
-        pageControl.configure(currentPage: currentPage, totalPages: totalPages)
+        pageLabel.text = "Page \(currentPage + 1) of \(totalPages)"
+        prevButton.isEnabled = currentPage > 0
+        nextButton.isEnabled = currentPage < totalPages - 1
     }
 }
 
 // MARK: - Actions
 
 private extension ModernDatabaseTableViewController {
+    @objc func headerColumnTapped(_ sender: UIButton) {
+        guard let title = sender.title(for: .normal) else { return }
+        let column = title.replacingOccurrences(of: " ↑", with: "").replacingOccurrences(of: " ↓", with: "")
+
+        if sortColumn == column {
+            sortAscending.toggle()
+        } else {
+            sortColumn = column
+            sortAscending = true
+        }
+        currentPage = 0
+        loadTableData()
+    }
+
+    @objc func toggleFilterBar() {
+        let isVisible = !filterBar.isHidden
+        filterBar.isHidden = isVisible
+        filterBarHeightConstraint?.constant = isVisible ? 0 : 50
+
+        UIView.animate(withDuration: 0.25) {
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    @objc func refreshData() {
+        loadTableData()
+    }
+
+    @objc func filterTextChanged() {
+        guard let column = selectedFilterColumn else { return }
+        let text = filterTextField.text ?? ""
+
+        if text.isEmpty {
+            columnFilters.removeValue(forKey: column)
+        } else {
+            columnFilters[column] = text
+        }
+        applyFilters()
+    }
+
+    @objc func clearFilters() {
+        filterTextField.text = ""
+        columnFilters.removeAll()
+        applyFilters()
+    }
+
+    @objc func prevPage() {
+        if currentPage > 0 {
+            currentPage -= 1
+            loadTableData()
+        }
+    }
+
+    @objc func nextPage() {
+        let totalPages = max(1, (table.rowCount + pageSize - 1) / pageSize)
+        if currentPage < totalPages - 1 {
+            currentPage += 1
+            loadTableData()
+        }
+    }
+
     @objc func showMoreOptions() {
         let alert = UIAlertController(title: "Options", message: nil, preferredStyle: .actionSheet)
 
-        alert.addAction(UIAlertAction(title: "Export Visible Data (CSV)", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Export as CSV", style: .default) { [weak self] _ in
             self?.exportData(format: .csv)
         })
 
-        alert.addAction(UIAlertAction(title: "Export Visible Data (JSON)", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Export as JSON", style: .default) { [weak self] _ in
             self?.exportData(format: .json)
         })
 
@@ -331,46 +577,22 @@ private extension ModernDatabaseTableViewController {
         }
     }
 
-    @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-
-        let point = gesture.location(in: collectionView)
-        if let indexPath = collectionView.indexPathForItem(at: point) {
-            showCellOptions(at: indexPath)
-        }
-    }
-
-    func showCellOptions(at indexPath: IndexPath) {
-        let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
-        let columnIndex = indexPath.item % visibleColumns.count
-        let rowIndex = indexPath.item / visibleColumns.count
-
+    func showRowOptions(at rowIndex: Int) {
         guard rowIndex < filteredRows.count else { return }
 
-        let column = visibleColumns[columnIndex]
-        let actualColumnIndex = columns.firstIndex(of: column) ?? columnIndex
-        let value = filteredRows[rowIndex][actualColumnIndex]
+        let alert = UIAlertController(title: "Row Actions", message: nil, preferredStyle: .actionSheet)
 
-        let alert = UIAlertController(
-            title: column,
-            message: formatValue(value),
-            preferredStyle: .actionSheet
-        )
-
-        alert.addAction(UIAlertAction(title: "Copy Value", style: .default) { [weak self] _ in
-            UIPasteboard.general.string = self?.formatValue(value) ?? ""
-            self?.showToast("Copied to clipboard")
-        })
-
-        alert.addAction(UIAlertAction(title: "Filter by This Value", style: .default) { [weak self] _ in
-            self?.columnFilters[column] = self?.formatValue(value) ?? ""
-            self?.applyFilters()
-            self?.showFilterBar(true)
+        alert.addAction(UIAlertAction(title: "Copy Row", style: .default) { [weak self] _ in
+            self?.copyRow(at: rowIndex)
         })
 
         if database.type == .sqlite {
             alert.addAction(UIAlertAction(title: "Edit Row", style: .default) { [weak self] _ in
                 self?.editRow(at: rowIndex)
+            })
+
+            alert.addAction(UIAlertAction(title: "Duplicate Row", style: .default) { [weak self] _ in
+                self?.duplicateRow(at: rowIndex)
             })
 
             alert.addAction(UIAlertAction(title: "Delete Row", style: .destructive) { [weak self] _ in
@@ -380,14 +602,29 @@ private extension ModernDatabaseTableViewController {
 
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
 
-        if let popover = alert.popoverPresentationController {
-            if let cell = collectionView.cellForItem(at: indexPath) {
-                popover.sourceView = cell
-                popover.sourceRect = cell.bounds
-            }
+        if let popover = alert.popoverPresentationController,
+           let cell = tableView.cellForRow(at: IndexPath(row: rowIndex, section: 0)) {
+            popover.sourceView = cell
+            popover.sourceRect = cell.bounds
         }
 
         present(alert, animated: true)
+    }
+
+    func copyRow(at rowIndex: Int) {
+        guard rowIndex < filteredRows.count else { return }
+        let row = filteredRows[rowIndex]
+        let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
+
+        var values: [String] = []
+        for column in visibleColumns {
+            if let index = columns.firstIndex(of: column), index < row.count {
+                values.append(formatValue(row[index]))
+            }
+        }
+
+        UIPasteboard.general.string = values.joined(separator: "\t")
+        showToast("Row copied")
     }
 
     func editRow(at rowIndex: Int) {
@@ -400,6 +637,28 @@ private extension ModernDatabaseTableViewController {
             columns: columns,
             row: row,
             isNewRow: false
+        )
+        editVC.delegate = self
+        let navController = UINavigationController(rootViewController: editVC)
+        present(navController, animated: true)
+    }
+
+    func duplicateRow(at rowIndex: Int) {
+        guard rowIndex < filteredRows.count else { return }
+
+        var row = filteredRows[rowIndex]
+
+        if let primaryKeyColumn = table.columns.first(where: { $0.isPrimaryKey }),
+           let primaryKeyIndex = columns.firstIndex(of: primaryKeyColumn.name) {
+            row[primaryKeyIndex] = nil
+        }
+
+        let editVC = DatabaseRowEditViewController(
+            database: database,
+            table: table,
+            columns: columns,
+            row: row,
+            isNewRow: true
         )
         editVC.delegate = self
         let navController = UINavigationController(rootViewController: editVC)
@@ -478,27 +737,30 @@ private extension ModernDatabaseTableViewController {
     }
 
     func showColumnManager() {
-        let alert = UIAlertController(title: "Manage Columns", message: "Toggle column visibility", preferredStyle: .actionSheet)
+        let alert = UIAlertController(title: "Manage Columns", message: "Toggle visibility", preferredStyle: .actionSheet)
 
         for column in columns {
             let isHidden = hiddenColumns.contains(column)
             let title = isHidden ? "☐ \(column)" : "☑ \(column)"
 
             alert.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                guard let self = self else { return }
                 if isHidden {
-                    self?.hiddenColumns.remove(column)
-                } else if self?.hiddenColumns.count ?? 0 < (self?.columns.count ?? 1) - 1 {
-                    self?.hiddenColumns.insert(column)
+                    self.hiddenColumns.remove(column)
+                } else if self.hiddenColumns.count < self.columns.count - 1 {
+                    self.hiddenColumns.insert(column)
                 }
-                self?.collectionView.collectionViewLayout = self?.createGridLayout() ?? UICollectionViewFlowLayout()
-                self?.collectionView.reloadData()
+                self.setupHeader()
+                self.updateContentWidth()
+                self.tableView.reloadData()
             })
         }
 
         alert.addAction(UIAlertAction(title: "Show All", style: .default) { [weak self] _ in
             self?.hiddenColumns.removeAll()
-            self?.collectionView.collectionViewLayout = self?.createGridLayout() ?? UICollectionViewFlowLayout()
-            self?.collectionView.reloadData()
+            self?.setupHeader()
+            self?.updateContentWidth()
+            self?.tableView.reloadData()
         })
 
         alert.addAction(UIAlertAction(title: "Done", style: .cancel))
@@ -508,15 +770,6 @@ private extension ModernDatabaseTableViewController {
         }
 
         present(alert, animated: true)
-    }
-
-    func showFilterBar(_ show: Bool) {
-        filterBar.isHidden = !show
-        filterBarHeightConstraint?.constant = show ? 50 : 0
-
-        UIView.animate(withDuration: 0.25) {
-            self.view.layoutIfNeeded()
-        }
     }
 
     func formatValue(_ value: Any?) -> String {
@@ -546,7 +799,7 @@ private extension ModernDatabaseTableViewController {
         view.addSubview(toast)
         NSLayoutConstraint.activate([
             toast.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            toast.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -60),
+            toast.bottomAnchor.constraint(equalTo: pageControl.topAnchor, constant: -16),
             toast.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             toast.heightAnchor.constraint(equalToConstant: 36)
         ])
@@ -645,117 +898,57 @@ private extension ModernDatabaseTableViewController {
     func copyAllData() {
         let csv = exportAsCSV(columns: columns.filter { !hiddenColumns.contains($0) })
         UIPasteboard.general.string = csv
-        showToast("Data copied to clipboard")
+        showToast("Data copied")
     }
 }
 
-// MARK: - UICollectionViewDataSource
+// MARK: - UITableViewDataSource
 
-extension ModernDatabaseTableViewController: UICollectionViewDataSource {
-    func numberOfSections(in collectionView: UICollectionView) -> Int {
-        return 1
+extension ModernDatabaseTableViewController: UITableViewDataSource {
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return filteredRows.count
     }
 
-    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        let visibleColumnCount = columns.count - hiddenColumns.count
-        return filteredRows.count * visibleColumnCount
-    }
-
-    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ModernDataCell.reuseId, for: indexPath) as! ModernDataCell
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: ModernGridRowCell.reuseId, for: indexPath) as! ModernGridRowCell
 
         let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
-        let columnIndex = indexPath.item % visibleColumns.count
-        let rowIndex = indexPath.item / visibleColumns.count
+        let row = filteredRows[indexPath.row]
 
-        if rowIndex < filteredRows.count {
-            let column = visibleColumns[columnIndex]
-            let actualColumnIndex = columns.firstIndex(of: column) ?? columnIndex
-            let value = filteredRows[rowIndex][actualColumnIndex]
-            cell.configure(value: value, isAlternateRow: rowIndex % 2 == 1)
+        var values: [Any?] = []
+        for column in visibleColumns {
+            if let index = columns.firstIndex(of: column), index < row.count {
+                values.append(row[index])
+            } else {
+                values.append(nil)
+            }
         }
 
+        cell.configure(values: values, columnWidth: columnWidth, isAlternate: indexPath.row % 2 == 1)
         return cell
     }
+}
 
-    func collectionView(_ collectionView: UICollectionView, viewForSupplementaryElementOfKind kind: String, at indexPath: IndexPath) -> UICollectionReusableView {
-        let header = collectionView.dequeueReusableSupplementaryView(
-            ofKind: kind,
-            withReuseIdentifier: ModernHeaderCell.reuseId,
-            for: indexPath
-        ) as! ModernHeaderCell
+// MARK: - UITableViewDelegate
 
-        let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
-        header.configure(columns: visibleColumns, sortColumn: sortColumn, sortAscending: sortAscending)
-        header.delegate = self
-
-        return header
+extension ModernDatabaseTableViewController: UITableViewDelegate {
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        showRowOptions(at: indexPath.row)
     }
 }
 
-// MARK: - UICollectionViewDelegate
+// MARK: - UIScrollViewDelegate
 
-extension ModernDatabaseTableViewController: UICollectionViewDelegate {
-    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        collectionView.deselectItem(at: indexPath, animated: true)
-        showCellOptions(at: indexPath)
-    }
-}
-
-// MARK: - Delegate Conformances
-
-extension ModernDatabaseTableViewController: ModernToolbarDelegate {
-    func toolbarDidTapFilter() {
-        let isVisible = !filterBar.isHidden
-        showFilterBar(!isVisible)
-    }
-
-    func toolbarDidTapRefresh() {
-        loadTableData()
-    }
-
-    func toolbarDidTapSearch() {
-        // Search functionality through filter bar
-        showFilterBar(true)
-    }
-}
-
-extension ModernDatabaseTableViewController: ModernFilterBarDelegate {
-    func filterBar(_ filterBar: ModernFilterBarView, didUpdateFilter filter: String, forColumn column: String) {
-        if filter.isEmpty {
-            columnFilters.removeValue(forKey: column)
-        } else {
-            columnFilters[column] = filter
+extension ModernDatabaseTableViewController: UIScrollViewDelegate {
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if scrollView == mainScrollView {
+            headerScrollView.contentOffset.x = scrollView.contentOffset.x
         }
-        applyFilters()
-    }
-
-    func filterBarDidClearAll(_ filterBar: ModernFilterBarView) {
-        columnFilters.removeAll()
-        applyFilters()
-        showFilterBar(false)
     }
 }
 
-extension ModernDatabaseTableViewController: ModernPageControlDelegate {
-    func pageControl(_ control: ModernPageControl, didChangeTo page: Int) {
-        currentPage = page
-        loadTableData()
-    }
-}
-
-extension ModernDatabaseTableViewController: ModernHeaderDelegate {
-    func header(_ header: ModernHeaderCell, didTapColumn column: String) {
-        if sortColumn == column {
-            sortAscending.toggle()
-        } else {
-            sortColumn = column
-            sortAscending = true
-        }
-        currentPage = 0
-        loadTableData()
-    }
-}
+// MARK: - DatabaseRowEditDelegate
 
 extension ModernDatabaseTableViewController: DatabaseRowEditDelegate {
     func didSaveRow() {
@@ -763,29 +956,22 @@ extension ModernDatabaseTableViewController: DatabaseRowEditDelegate {
     }
 }
 
-// MARK: - Modern Data Cell
+// MARK: - Modern Grid Row Cell
 
-final class ModernDataCell: UICollectionViewCell {
-    static let reuseId = "ModernDataCell"
+final class ModernGridRowCell: UITableViewCell {
+    static let reuseId = "ModernGridRowCell"
 
-    private let label: UILabel = {
-        let label = UILabel()
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        label.numberOfLines = 2
-        label.lineBreakMode = .byTruncatingTail
-        return label
+    private let stackView: UIStackView = {
+        let stack = UIStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.spacing = 0
+        stack.distribution = .fill
+        return stack
     }()
 
-    private let separatorView: UIView = {
-        let view = UIView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.backgroundColor = .separator
-        return view
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
         setupViews()
     }
 
@@ -794,23 +980,36 @@ final class ModernDataCell: UICollectionViewCell {
     }
 
     private func setupViews() {
-        contentView.addSubview(label)
-        contentView.addSubview(separatorView)
+        contentView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
-            label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-
-            separatorView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            separatorView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4),
-            separatorView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
-            separatorView.widthAnchor.constraint(equalToConstant: 1)
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
     }
 
-    func configure(value: Any?, isAlternateRow: Bool) {
-        backgroundColor = isAlternateRow ? UIColor.systemGray6 : .systemBackground
+    func configure(values: [Any?], columnWidth: CGFloat, isAlternate: Bool) {
+        stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
+
+        backgroundColor = isAlternate ? UIColor.systemGray6 : .systemBackground
+
+        for value in values {
+            let cellView = createCellView(for: value, width: columnWidth)
+            stackView.addArrangedSubview(cellView)
+        }
+    }
+
+    private func createCellView(for value: Any?, width: CGFloat) -> UIView {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        label.numberOfLines = 2
+        label.lineBreakMode = .byTruncatingTail
 
         if let value = value {
             if let data = value as? Data {
@@ -829,358 +1028,27 @@ final class ModernDataCell: UICollectionViewCell {
             label.text = "NULL"
             label.textColor = .systemOrange
         }
-    }
-}
 
-// MARK: - Modern Header Cell
+        let separator = UIView()
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        separator.backgroundColor = .separator
 
-@MainActor
-protocol ModernHeaderDelegate: AnyObject {
-    func header(_ header: ModernHeaderCell, didTapColumn column: String)
-}
-
-final class ModernHeaderCell: UICollectionReusableView {
-    static let reuseId = "ModernHeaderCell"
-
-    weak var delegate: ModernHeaderDelegate?
-    private var columns: [String] = []
-
-    private let stackView: UIStackView = {
-        let stack = UIStackView()
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.axis = .horizontal
-        stack.distribution = .fillEqually
-        stack.spacing = 0
-        return stack
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupViews()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupViews() {
-        backgroundColor = .systemGray5
-        addSubview(stackView)
+        container.addSubview(label)
+        container.addSubview(separator)
 
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stackView.topAnchor.constraint(equalTo: topAnchor),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-    }
+            container.widthAnchor.constraint(equalToConstant: width),
 
-    func configure(columns: [String], sortColumn: String?, sortAscending: Bool) {
-        self.columns = columns
-        stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            label.centerYAnchor.constraint(equalTo: container.centerYAnchor),
 
-        for (index, column) in columns.enumerated() {
-            let button = UIButton(type: .system)
-            button.tag = index
-
-            var title = column
-            if column == sortColumn {
-                title += sortAscending ? " ↑" : " ↓"
-            }
-
-            button.setTitle(title, for: .normal)
-            button.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
-            button.titleLabel?.lineBreakMode = .byTruncatingTail
-            button.contentHorizontalAlignment = .left
-            button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
-            button.addTarget(self, action: #selector(columnTapped(_:)), for: .touchUpInside)
-
-            stackView.addArrangedSubview(button)
-        }
-    }
-
-    @objc private func columnTapped(_ sender: UIButton) {
-        let column = columns[sender.tag]
-        delegate?.header(self, didTapColumn: column)
-    }
-}
-
-// MARK: - Modern Toolbar View
-
-@MainActor
-protocol ModernToolbarDelegate: AnyObject {
-    func toolbarDidTapFilter()
-    func toolbarDidTapRefresh()
-    func toolbarDidTapSearch()
-}
-
-final class ModernToolbarView: UIView {
-    weak var delegate: ModernToolbarDelegate?
-
-    private let statsLabel: UILabel = {
-        let label = UILabel()
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .systemFont(ofSize: 14, weight: .medium)
-        label.textColor = .secondaryLabel
-        return label
-    }()
-
-    private lazy var filterButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.setImage(UIImage(systemName: "line.3.horizontal.decrease.circle"), for: .normal)
-        button.addTarget(self, action: #selector(filterTapped), for: .touchUpInside)
-        return button
-    }()
-
-    private lazy var refreshButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.setImage(UIImage(systemName: "arrow.clockwise"), for: .normal)
-        button.addTarget(self, action: #selector(refreshTapped), for: .touchUpInside)
-        return button
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupViews()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupViews() {
-        backgroundColor = .systemGray6
-
-        addSubview(statsLabel)
-        addSubview(filterButton)
-        addSubview(refreshButton)
-
-        NSLayoutConstraint.activate([
-            statsLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            statsLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            refreshButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            refreshButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            refreshButton.widthAnchor.constraint(equalToConstant: 44),
-
-            filterButton.trailingAnchor.constraint(equalTo: refreshButton.leadingAnchor, constant: -8),
-            filterButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            filterButton.widthAnchor.constraint(equalToConstant: 44)
-        ])
-    }
-
-    func configure(rowCount: Int, columnCount: Int) {
-        statsLabel.text = "\(rowCount) rows × \(columnCount) columns"
-    }
-
-    @objc private func filterTapped() {
-        delegate?.toolbarDidTapFilter()
-    }
-
-    @objc private func refreshTapped() {
-        delegate?.toolbarDidTapRefresh()
-    }
-}
-
-// MARK: - Modern Filter Bar View
-
-@MainActor
-protocol ModernFilterBarDelegate: AnyObject {
-    func filterBar(_ filterBar: ModernFilterBarView, didUpdateFilter filter: String, forColumn column: String)
-    func filterBarDidClearAll(_ filterBar: ModernFilterBarView)
-}
-
-final class ModernFilterBarView: UIView {
-    weak var delegate: ModernFilterBarDelegate?
-    private var columns: [String] = []
-    private var selectedColumn: String?
-
-    private let columnPicker: UIButton = {
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.setTitle("Column", for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 14)
-        return button
-    }()
-
-    private let filterTextField: UITextField = {
-        let field = UITextField()
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.placeholder = "Filter value..."
-        field.borderStyle = .roundedRect
-        field.font = .systemFont(ofSize: 14)
-        field.clearButtonMode = .whileEditing
-        return field
-    }()
-
-    private lazy var clearButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
-        button.tintColor = .systemGray
-        button.addTarget(self, action: #selector(clearTapped), for: .touchUpInside)
-        return button
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupViews()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupViews() {
-        backgroundColor = .systemGray6
-
-        addSubview(columnPicker)
-        addSubview(filterTextField)
-        addSubview(clearButton)
-
-        filterTextField.addTarget(self, action: #selector(filterChanged), for: .editingChanged)
-
-        NSLayoutConstraint.activate([
-            columnPicker.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            columnPicker.centerYAnchor.constraint(equalTo: centerYAnchor),
-            columnPicker.widthAnchor.constraint(equalToConstant: 100),
-
-            filterTextField.leadingAnchor.constraint(equalTo: columnPicker.trailingAnchor, constant: 8),
-            filterTextField.centerYAnchor.constraint(equalTo: centerYAnchor),
-            filterTextField.heightAnchor.constraint(equalToConstant: 34),
-
-            clearButton.leadingAnchor.constraint(equalTo: filterTextField.trailingAnchor, constant: 8),
-            clearButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            clearButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            clearButton.widthAnchor.constraint(equalToConstant: 34)
+            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            separator.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
+            separator.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4),
+            separator.widthAnchor.constraint(equalToConstant: 1)
         ])
 
-        setupColumnPicker()
-    }
-
-    private func setupColumnPicker() {
-        columnPicker.showsMenuAsPrimaryAction = true
-        updateColumnPickerMenu()
-    }
-
-    private func updateColumnPickerMenu() {
-        let actions = columns.map { column in
-            UIAction(title: column, state: column == selectedColumn ? .on : .off) { [weak self] _ in
-                self?.selectedColumn = column
-                self?.columnPicker.setTitle(column, for: .normal)
-                self?.updateColumnPickerMenu()
-                if let text = self?.filterTextField.text, !text.isEmpty {
-                    self?.delegate?.filterBar(self!, didUpdateFilter: text, forColumn: column)
-                }
-            }
-        }
-        columnPicker.menu = UIMenu(children: actions)
-    }
-
-    func configure(with columns: [String]) {
-        self.columns = columns
-        if let first = columns.first {
-            selectedColumn = first
-            columnPicker.setTitle(first, for: .normal)
-        }
-        updateColumnPickerMenu()
-    }
-
-    @objc private func filterChanged() {
-        guard let column = selectedColumn else { return }
-        delegate?.filterBar(self, didUpdateFilter: filterTextField.text ?? "", forColumn: column)
-    }
-
-    @objc private func clearTapped() {
-        filterTextField.text = ""
-        delegate?.filterBarDidClearAll(self)
-    }
-}
-
-// MARK: - Modern Page Control
-
-@MainActor
-protocol ModernPageControlDelegate: AnyObject {
-    func pageControl(_ control: ModernPageControl, didChangeTo page: Int)
-}
-
-final class ModernPageControl: UIView {
-    weak var delegate: ModernPageControlDelegate?
-    private var currentPage = 0
-    private var totalPages = 1
-
-    private lazy var prevButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.setImage(UIImage(systemName: "chevron.left"), for: .normal)
-        button.addTarget(self, action: #selector(prevTapped), for: .touchUpInside)
-        return button
-    }()
-
-    private let pageLabel: UILabel = {
-        let label = UILabel()
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
-        label.textAlignment = .center
-        return label
-    }()
-
-    private lazy var nextButton: UIButton = {
-        let button = UIButton(type: .system)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.setImage(UIImage(systemName: "chevron.right"), for: .normal)
-        button.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
-        return button
-    }()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupViews()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupViews() {
-        addSubview(prevButton)
-        addSubview(pageLabel)
-        addSubview(nextButton)
-
-        NSLayoutConstraint.activate([
-            prevButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            prevButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            prevButton.widthAnchor.constraint(equalToConstant: 44),
-
-            pageLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            pageLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            nextButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            nextButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            nextButton.widthAnchor.constraint(equalToConstant: 44)
-        ])
-    }
-
-    func configure(currentPage: Int, totalPages: Int) {
-        self.currentPage = currentPage
-        self.totalPages = totalPages
-
-        pageLabel.text = "Page \(currentPage + 1) of \(totalPages)"
-        prevButton.isEnabled = currentPage > 0
-        nextButton.isEnabled = currentPage < totalPages - 1
-    }
-
-    @objc private func prevTapped() {
-        if currentPage > 0 {
-            delegate?.pageControl(self, didChangeTo: currentPage - 1)
-        }
-    }
-
-    @objc private func nextTapped() {
-        if currentPage < totalPages - 1 {
-            delegate?.pageControl(self, didChangeTo: currentPage + 1)
-        }
+        return container
     }
 }
