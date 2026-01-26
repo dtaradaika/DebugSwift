@@ -108,6 +108,15 @@ final class NetworkViewController: BaseController, MainFeatureType {
     // Statistics update timer
     private var statsUpdateTimer: Timer?
 
+    // Debounce mechanism for UI updates
+    private var reloadDebounceWorkItem: DispatchWorkItem?
+    private var pendingReloadNeedsScroll = false
+    private var pendingReloadSuccess = true
+    private let reloadDebounceInterval: TimeInterval = 0.1 // 100ms debounce
+
+    // WebSocket debounce
+    private var webSocketDebounceWorkItem: DispatchWorkItem?
+
     override init() {
         super.init()
         setup()
@@ -134,6 +143,10 @@ final class NetworkViewController: BaseController, MainFeatureType {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopStatsTimer()
+        reloadDebounceWorkItem?.cancel()
+        reloadDebounceWorkItem = nil
+        webSocketDebounceWorkItem?.cancel()
+        webSocketDebounceWorkItem = nil
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -158,7 +171,7 @@ final class NetworkViewController: BaseController, MainFeatureType {
     }
 
     func observers() {
-        // HTTP notifications
+        // HTTP notifications - debounced to prevent CPU overload during request spam
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name(rawValue: "reloadHttp_DebugSwift"),
             object: nil,
@@ -166,35 +179,68 @@ final class NetworkViewController: BaseController, MainFeatureType {
         ) { [weak self] notification in
             let success = notification.object as? Bool ?? false
             MainActor.assumeIsolated {
-                self?.reloadHttp(
+                self?.scheduleReload(
                     needScrollToEnd: self?.viewModel.reachEnd ?? true,
                     success: success
                 )
-                self?.updateHTTPStatistics()
             }
         }
-        
-        // WebSocket notifications
+
+        // WebSocket notifications - debounced to prevent CPU overload during frame spam
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("reloadWebSocket_DebugSwift"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.loadWebSocketConnections()
+                self?.scheduleWebSocketReload()
             }
         }
-        
-        // WebSocket notifications
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("reloadWebSocket_DebugSwift"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
+    }
+
+    /// Debounced WebSocket reload to prevent CPU overload when many frames arrive quickly
+    private func scheduleWebSocketReload() {
+        webSocketDebounceWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
             MainActor.assumeIsolated {
-                self?.loadWebSocketConnections()
+                self.loadWebSocketConnections()
             }
         }
+
+        webSocketDebounceWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + reloadDebounceInterval, execute: workItem)
+    }
+
+    /// Debounced reload to prevent CPU overload when many requests arrive quickly
+    private func scheduleReload(needScrollToEnd: Bool, success: Bool) {
+        // Accumulate state - scroll if any request wanted scroll, track last success state
+        if needScrollToEnd {
+            pendingReloadNeedsScroll = true
+        }
+        pendingReloadSuccess = success
+
+        // Cancel any pending reload
+        reloadDebounceWorkItem?.cancel()
+
+        // Schedule a new debounced reload
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.reloadHttp(
+                    needScrollToEnd: self.pendingReloadNeedsScroll,
+                    success: self.pendingReloadSuccess
+                )
+                self.updateHTTPStatistics()
+
+                // Reset state
+                self.pendingReloadNeedsScroll = false
+            }
+        }
+
+        reloadDebounceWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + reloadDebounceInterval, execute: workItem)
     }
 
     func reloadHttp(needScrollToEnd: Bool = false, success: Bool = true) {
