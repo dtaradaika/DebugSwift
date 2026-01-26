@@ -20,7 +20,44 @@ final class DatabaseBrowserViewModel {
     // MARK: - Public Methods
     
     func loadDatabaseFiles() {
-        databases = DatabaseFileManager.shared.discoverDatabaseFiles()
+        var allDatabases = DatabaseFileManager.shared.discoverDatabaseFiles()
+
+        // Add registered encrypted databases that might not be auto-discovered
+        let encryptedConfigs = DebugSwift.Database.shared.getEncryptedDatabases()
+        for config in encryptedConfigs {
+            // Check if this database is already in the list
+            if !allDatabases.contains(where: { $0.path == config.path }) {
+                // Try to get file info for the encrypted database
+                let fileManager = FileManager.default
+                if fileManager.fileExists(atPath: config.path) {
+                    let attributes = try? fileManager.attributesOfItem(atPath: config.path)
+                    let fileSize = attributes?[.size] as? Int64 ?? 0
+
+                    let databaseFile = DatabaseFile(
+                        name: config.name,
+                        path: config.path,
+                        type: .sqlite,
+                        size: fileSize,
+                        isEncrypted: true
+                    )
+                    allDatabases.append(databaseFile)
+                }
+            } else {
+                // Mark existing database as encrypted
+                if let index = allDatabases.firstIndex(where: { $0.path == config.path }) {
+                    let existing = allDatabases[index]
+                    allDatabases[index] = DatabaseFile(
+                        name: config.name.isEmpty ? existing.name : config.name,
+                        path: existing.path,
+                        type: existing.type,
+                        size: existing.size,
+                        isEncrypted: true
+                    )
+                }
+            }
+        }
+
+        databases = allDatabases.sorted { $0.name < $1.name }
         applyFilter()
     }
     
@@ -93,11 +130,15 @@ final class DatabaseFileManager: @unchecked Sendable {
             if let databaseType = DatabaseType.from(fileName: fileName) {
                 if let attributes = try? fileManager.attributesOfItem(atPath: fullPath),
                    let fileSize = attributes[.size] as? Int64 {
+                    // Check if this database is registered as encrypted
+                    let isEncrypted = DebugSwift.Database.shared.isEncrypted(path: fullPath)
+
                     let databaseFile = DatabaseFile(
                         name: (fileName as NSString).lastPathComponent,
                         path: fullPath,
                         type: databaseType,
-                        size: fileSize
+                        size: fileSize,
+                        isEncrypted: isEncrypted
                     )
                     files.append(databaseFile)
                 }
@@ -115,7 +156,16 @@ struct DatabaseFile {
     let path: String
     let type: DatabaseType
     let size: Int64
-    
+    let isEncrypted: Bool
+
+    init(name: String, path: String, type: DatabaseType, size: Int64, isEncrypted: Bool = false) {
+        self.name = name
+        self.path = path
+        self.type = type
+        self.size = size
+        self.isEncrypted = isEncrypted
+    }
+
     var formattedSize: String {
         ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }

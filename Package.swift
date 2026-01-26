@@ -13,14 +13,24 @@ let package = Package(
             targets: ["DebugSwift"]
         )
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/sqlcipher/SQLCipher.swift.git", from: "4.11.0")
+    ],
     targets: [
         .target(
             name: "DebugSwift",
-            dependencies: [],
+            dependencies: [
+                .product(name: "SQLCipher", package: "SQLCipher.swift")
+            ],
             path: "DebugSwift",
             resources: [
                 .process("Resources")
+            ],
+            cSettings: [
+                .define("SQLITE_HAS_CODEC", to: "1")
+            ],
+            swiftSettings: [
+                .define("SQLITE_HAS_CODEC")
             ]
         )
     ],

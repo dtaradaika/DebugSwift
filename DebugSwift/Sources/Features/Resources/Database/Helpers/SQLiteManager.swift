@@ -2,28 +2,63 @@
 //  SQLiteManager.swift
 //  DebugSwift
 //
-//  SQLite database operations manager
+//  SQLite database operations manager with SQLCipher encryption support
 //
 
 import Foundation
-import SQLite3
+import SQLCipher
 
 final class SQLiteManager: @unchecked Sendable {
     static let shared = SQLiteManager()
-    
+
     private init() {}
-    
+
+    // MARK: - Database Connection Helpers
+
+    /// Opens a database connection, applying encryption key if registered
+    /// - Parameters:
+    ///   - path: Path to the database file
+    ///   - flags: SQLite open flags
+    /// - Returns: Database pointer or nil if failed
+    private func openDatabase(at path: String, flags: Int32) -> OpaquePointer? {
+        var db: OpaquePointer?
+
+        guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK else {
+            Debug.print("Unable to open database at \(path)")
+            return nil
+        }
+
+        // Check if this database is registered as encrypted and apply key
+        if let key = DebugSwift.Database.shared.getKey(for: path) {
+            let keyResult = sqlite3_key(db, key, Int32(key.utf8.count))
+            if keyResult != SQLITE_OK {
+                Debug.print("Failed to apply encryption key for database at \(path)")
+                sqlite3_close(db)
+                return nil
+            }
+
+            // Verify the key is correct by executing a simple query
+            var verifyStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, "SELECT count(*) FROM sqlite_master", -1, &verifyStmt, nil) != SQLITE_OK {
+                Debug.print("Encryption key verification failed for database at \(path)")
+                sqlite3_close(db)
+                return nil
+            }
+            sqlite3_finalize(verifyStmt)
+        }
+
+        return db
+    }
+
     // MARK: - Table Operations
-    
+
     func getTables(from path: String) -> [DatabaseTable] {
         var tables: [DatabaseTable] = []
-        var db: OpaquePointer?
-        
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
-            Debug.print("Unable to open database at \(path)")
+
+        guard let db = openDatabase(at: path, flags: SQLITE_OPEN_READONLY) else {
             return tables
         }
-        
+
         defer { sqlite3_close(db) }
         
         let query = """
@@ -112,12 +147,10 @@ final class SQLiteManager: @unchecked Sendable {
         orderBy: String? = nil,
         ascending: Bool = true
     ) -> (columns: [String], rows: [[Any?]]) {
-        var db: OpaquePointer?
-        
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+        guard let db = openDatabase(at: path, flags: SQLITE_OPEN_READONLY) else {
             return ([], [])
         }
-        
+
         defer { sqlite3_close(db) }
         
         // Get column names
@@ -201,12 +234,10 @@ final class SQLiteManager: @unchecked Sendable {
     // MARK: - Query Execution
     
     func executeQuery(path: String, query: String) -> QueryResult {
-        var db: OpaquePointer?
-        
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+        guard let db = openDatabase(at: path, flags: SQLITE_OPEN_READWRITE) else {
             return .error("Unable to open database")
         }
-        
+
         defer { sqlite3_close(db) }
         
         var statement: OpaquePointer?
@@ -297,12 +328,10 @@ final class SQLiteManager: @unchecked Sendable {
     }
     
     private func executeParameterizedQuery(path: String, query: String, values: [Any?]) -> QueryResult {
-        var db: OpaquePointer?
-        
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+        guard let db = openDatabase(at: path, flags: SQLITE_OPEN_READWRITE) else {
             return .error("Unable to open database")
         }
-        
+
         defer { sqlite3_close(db) }
         
         var statement: OpaquePointer?

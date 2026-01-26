@@ -140,14 +140,24 @@ final class DatabaseFileCell: UITableViewCell {
         imageView.tintColor = .systemBlue
         return imageView
     }()
-    
+
+    private let lockImageView: UIImageView = {
+        let imageView = UIImageView()
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.contentMode = .scaleAspectFit
+        imageView.tintColor = .systemOrange
+        imageView.image = UIImage(systemName: "lock.fill")
+        imageView.isHidden = true
+        return imageView
+    }()
+
     private let nameLabel: UILabel = {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 16, weight: .medium)
         return label
     }()
-    
+
     private let typeLabel: UILabel = {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -155,7 +165,7 @@ final class DatabaseFileCell: UITableViewCell {
         label.textColor = .secondaryLabel
         return label
     }()
-    
+
     private let sizeLabel: UILabel = {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -163,44 +173,53 @@ final class DatabaseFileCell: UITableViewCell {
         label.textColor = .tertiaryLabel
         return label
     }()
-    
+
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         setupViews()
     }
-    
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-    
+
     private func setupViews() {
         contentView.addSubview(iconImageView)
+        contentView.addSubview(lockImageView)
         contentView.addSubview(nameLabel)
         contentView.addSubview(typeLabel)
         contentView.addSubview(sizeLabel)
-        
+
         NSLayoutConstraint.activate([
             iconImageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
             iconImageView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             iconImageView.widthAnchor.constraint(equalToConstant: 40),
             iconImageView.heightAnchor.constraint(equalToConstant: 40),
-            
+
+            lockImageView.trailingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 4),
+            lockImageView.bottomAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 4),
+            lockImageView.widthAnchor.constraint(equalToConstant: 16),
+            lockImageView.heightAnchor.constraint(equalToConstant: 16),
+
             nameLabel.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 12),
             nameLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
             nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            
+
             typeLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             typeLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
-            
+
             sizeLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             sizeLabel.topAnchor.constraint(equalTo: typeLabel.bottomAnchor, constant: 4)
         ])
     }
-    
+
     func configure(with database: DatabaseFile) {
         nameLabel.text = database.name
-        typeLabel.text = database.type.displayName
+        typeLabel.text = database.isEncrypted
+            ? "\(database.type.displayName) (Encrypted)"
+            : database.type.displayName
         sizeLabel.text = database.formattedSize
         iconImageView.image = database.type.icon
+        lockImageView.isHidden = !database.isEncrypted
     }
 } 
