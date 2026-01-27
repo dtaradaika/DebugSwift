@@ -30,12 +30,6 @@ private final class SharedSessionManager: NSObject, URLSessionDataDelegate, URLS
         let config = URLSessionConfiguration.default
         config.protocolClasses = config.protocolClasses?.filter { $0 != CustomHTTPProtocol.self } ?? []
 
-        // Use shared storage for cookies and credentials (required for auth like Cognito)
-        config.httpCookieStorage = HTTPCookieStorage.shared
-        config.urlCredentialStorage = URLCredentialStorage.shared
-        config.httpCookieAcceptPolicy = .always
-        config.httpShouldSetCookies = true
-
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
@@ -125,14 +119,7 @@ private final class SharedSessionManager: NSObject, URLSessionDataDelegate, URLS
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        // Handle server trust challenges directly (required for SSL/TLS)
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           let serverTrust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-            return
-        }
-
-        // For other session-level challenges, try to find any active protocol to forward
+        // For session-level challenges, try to find any active protocol to forward
         lock.lock()
         let anyProto = protocolHandlers.values.first?.value
         lock.unlock()
@@ -150,13 +137,6 @@ private final class SharedSessionManager: NSObject, URLSessionDataDelegate, URLS
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        // Handle server trust challenges directly (required for SSL/TLS)
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           let serverTrust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-            return
-        }
-
         if let proto = getProtocol(for: task) {
             proto.handleTaskChallenge(session: session, task: task, challenge: challenge, completionHandler: completionHandler)
         } else {
