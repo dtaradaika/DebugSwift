@@ -8,145 +8,6 @@
 
 import Foundation
 
-// MARK: - Shared Session Manager
-
-/// Manages a shared URLSession to avoid creating new sessions per request
-private final class SharedSessionManager: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate, @unchecked Sendable {
-    static let shared = SharedSessionManager()
-
-    private var session: URLSession!
-    private let lock = NSLock()
-    private var protocolHandlers: [Int: WeakProtocolBox] = [:] // taskIdentifier -> protocol
-
-    private class WeakProtocolBox {
-        weak var value: CustomHTTPProtocol?
-        init(_ value: CustomHTTPProtocol) { self.value = value }
-    }
-
-    private override init() {
-        super.init()
-
-        // Create configuration without CustomHTTPProtocol to prevent recursion
-        let config = URLSessionConfiguration.default
-        config.protocolClasses = config.protocolClasses?.filter { $0 != CustomHTTPProtocol.self } ?? []
-
-        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }
-
-    func createTask(with request: URLRequest, for protocolInstance: CustomHTTPProtocol) -> URLSessionDataTask {
-        let task = session.dataTask(with: request)
-        lock.lock()
-        protocolHandlers[task.taskIdentifier] = WeakProtocolBox(protocolInstance)
-        lock.unlock()
-        return task
-    }
-
-    func removeHandler(for taskIdentifier: Int) {
-        lock.lock()
-        protocolHandlers.removeValue(forKey: taskIdentifier)
-        lock.unlock()
-    }
-
-    private func getProtocol(for task: URLSessionTask) -> CustomHTTPProtocol? {
-        lock.lock()
-        let handler = protocolHandlers[task.taskIdentifier]?.value
-        lock.unlock()
-        return handler
-    }
-
-    // MARK: - URLSessionDataDelegate
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        if let proto = getProtocol(for: task) {
-            proto.handleRedirection(response: response, newRequest: request, completionHandler: completionHandler)
-        } else {
-            completionHandler(request)
-        }
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
-        if let proto = getProtocol(for: dataTask) {
-            proto.handleResponse(dataTask: dataTask, response: response, completionHandler: completionHandler)
-        } else {
-            completionHandler(.allow)
-        }
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        if let proto = getProtocol(for: dataTask) {
-            proto.handleData(data)
-        }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let proto = getProtocol(for: task) {
-            proto.handleCompletion(session: session, task: task, error: error)
-        }
-        removeHandler(for: task.taskIdentifier)
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        didSendBodyData bytesSent: Int64,
-        totalBytesSent: Int64,
-        totalBytesExpectedToSend: Int64
-    ) {
-        if let proto = getProtocol(for: task) {
-            proto.handleBodyDataSent(
-                session: session,
-                task: task,
-                bytesSent: bytesSent,
-                totalBytesSent: totalBytesSent,
-                totalBytesExpectedToSend: totalBytesExpectedToSend
-            )
-        }
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        // For session-level challenges, try to find any active protocol to forward
-        lock.lock()
-        let anyProto = protocolHandlers.values.first?.value
-        lock.unlock()
-
-        if let proto = anyProto {
-            proto.handleSessionChallenge(session: session, challenge: challenge, completionHandler: completionHandler)
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        if let proto = getProtocol(for: task) {
-            proto.handleTaskChallenge(session: session, task: task, challenge: challenge, completionHandler: completionHandler)
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-}
-
-// MARK: - CustomHTTPProtocol
-
 public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
     private static let requestProperty = "com.custom.http.protocol"
 
@@ -194,6 +55,7 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         request
     }
 
+    private var session: URLSession?
     private var dataTask: URLSessionDataTask?
     private var cachePolicy: URLCache.StoragePolicy = .notAllowed
     private var data: Data = .init()
@@ -206,7 +68,7 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
     private var prevStartTime: Date?
 
     private var threadOperator: ThreadOperator?
-
+    
     // Store reference to original delegate for forwarding
     private weak var originalDelegate: URLSessionDelegate?
 
@@ -240,7 +102,7 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         }
 
         URLProtocol.setProperty(true, forKey: CustomHTTPProtocol.requestProperty, in: newRequest)
-
+        
         // Track request for threshold monitoring
         if let url = request.url {
             NetworkThresholdTracker.shared.trackRequest(url: url)
@@ -265,18 +127,44 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         startTime = Date()
         prevUrl = request.url
         prevStartTime = startTime
-
+        
         // Capture the most recent application delegate for forwarding authentication challenges
         originalDelegate = URLSessionDelegateRegistry.shared.getMostRecentDelegate()
-
-        // Use shared session manager to avoid creating new URLSession per request
-        dataTask = SharedSessionManager.shared.createTask(with: newRequest as URLRequest, for: self)
+        
+        // Use preserved configuration if available, otherwise fall back to default
+        let config = getPreservedConfigurationForRequest() ?? URLSessionConfiguration.default
+        
+        session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        dataTask = session?.dataTask(with: newRequest as URLRequest)
         dataTask?.resume()
+    }
+    
+    private func getPreservedConfigurationForRequest() -> URLSessionConfiguration? {
+        // Check if we have stored TLS configuration settings
+        guard UserDefaults.standard.bool(forKey: "DebugSwift.HasTLSConfig") else {
+            return nil
+        }
+        
+        // Create a configuration with preserved TLS settings
+        let config = URLSessionConfiguration.default
+        
+        let minVersion = UserDefaults.standard.integer(forKey: "DebugSwift.TLSMinVersion")
+        let maxVersion = UserDefaults.standard.integer(forKey: "DebugSwift.TLSMaxVersion")
+        
+        if minVersion > 0, let tlsMin = tls_protocol_version_t(rawValue: UInt16(minVersion)) {
+            config.tlsMinimumSupportedProtocolVersion = tlsMin
+        }
+        if maxVersion > 0, let tlsMax = tls_protocol_version_t(rawValue: UInt16(maxVersion)) {
+            config.tlsMaximumSupportedProtocolVersion = tlsMax
+        }
+        
+        return config
     }
 
     public override func stopLoading() {
+        dataTask?.cancel()
+
         if let task = dataTask {
-            SharedSessionManager.shared.removeHandler(for: task.taskIdentifier)
             task.cancel()
             dataTask = nil
         }
@@ -285,171 +173,8 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
             guard await NetworkHelper.shared.isNetworkEnable else {
                 return
             }
-
+            
             await processNetworkData()
-        }
-    }
-
-    // MARK: - Handler Methods (called by SharedSessionManager)
-
-    func handleRedirection(
-        response: HTTPURLResponse,
-        newRequest: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        threadOperator?.execute { [weak self] in
-            guard let self else { return }
-            Debug.print(#function)
-
-            self.client?.urlProtocol(self, wasRedirectedTo: newRequest, redirectResponse: response)
-            self.response = response
-            completionHandler(newRequest)
-        }
-    }
-
-    func handleResponse(
-        dataTask: URLSessionDataTask,
-        response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
-        threadOperator?.execute { [weak self] in
-            guard let self else { return }
-            Debug.print(#function)
-
-            if let response = response as? HTTPURLResponse, let request = dataTask.originalRequest {
-                self.cachePolicy = CacheHelper.cacheStoragePolicy(for: request, and: response)
-            }
-
-            DebugSwift.Network.shared.delegate?.urlSession(
-                self,
-                didReceive: response
-            )
-            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: self.cachePolicy)
-            self.response = response as? HTTPURLResponse
-            completionHandler(.allow)
-        }
-    }
-
-    func handleData(_ data: Data) {
-        threadOperator?.execute { [weak self] in
-            guard let self else { return }
-            Debug.print(#function)
-
-            var hasAddedData = false
-            if self.cachePolicy == .allowed {
-                self.data.append(data)
-                hasAddedData = true
-            }
-
-            DebugSwift.Network.shared.delegate?.urlSession(
-                self,
-                didReceive: data
-            )
-            self.client?.urlProtocol(self, didLoad: data)
-            self.didReceiveData = true
-            if self.prevUrl == self.response?.url, self.prevStartTime == self.startTime {
-                if !hasAddedData { self.data.append(data) }
-            } else {
-                self.data = data
-            }
-        }
-    }
-
-    func handleCompletion(session: URLSession, task: URLSessionTask, error: Error?) {
-        threadOperator?.execute { [weak self] in
-            guard let self else { return }
-            if let error {
-                self.error = error
-                if self.canRetry(error: error as NSError), let request = task.originalRequest {
-                    self.didRetry = true
-                    self.dataTask = SharedSessionManager.shared.createTask(with: request, for: self)
-                    self.dataTask?.resume()
-                    return
-                }
-                DebugSwift.Network.shared.delegate?.urlSession(
-                    self,
-                    didFailWithError: error
-                )
-                self.client?.urlProtocol(self, didFailWithError: error)
-                return
-            }
-
-            DebugSwift.Network.shared.delegate?.didFinishLoading(self)
-            self.client?.urlProtocolDidFinishLoading(self)
-
-            if self.cachePolicy == .allowed {
-                URLCache.customHttp.storeIfNeeded(for: task, data: self.data)
-            }
-        }
-    }
-
-    func handleBodyDataSent(
-        session: URLSession,
-        task: URLSessionTask,
-        bytesSent: Int64,
-        totalBytesSent: Int64,
-        totalBytesExpectedToSend: Int64
-    ) {
-        threadOperator?.execute { [weak self] in
-            guard let self else { return }
-            Debug.print(#function)
-
-            DebugSwift.Network.shared.delegate?.urlSession(
-                self,
-                session,
-                task: task,
-                didSendBodyData: bytesSent,
-                totalBytesSent: totalBytesSent,
-                totalBytesExpectedToSend: totalBytesExpectedToSend
-            )
-        }
-    }
-
-    func handleSessionChallenge(
-        session: URLSession,
-        challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        threadOperator?.execute { [weak self] in
-            guard let self else {
-                completionHandler(.performDefaultHandling, nil)
-                return
-            }
-
-            Debug.print(#function)
-
-            // Forward to original delegate if available and implements the method
-            if let originalDelegate = self.originalDelegate,
-               originalDelegate.responds(to: #selector(URLSessionDelegate.urlSession(_:didReceive:completionHandler:))) {
-                originalDelegate.urlSession?(session, didReceive: challenge, completionHandler: completionHandler)
-            } else {
-                completionHandler(.performDefaultHandling, nil)
-            }
-        }
-    }
-
-    func handleTaskChallenge(
-        session: URLSession,
-        task: URLSessionTask,
-        challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        threadOperator?.execute { [weak self] in
-            guard let self else {
-                completionHandler(.performDefaultHandling, nil)
-                return
-            }
-
-            Debug.print(#function)
-
-            // Forward to original delegate if available and implements the method
-            if let originalDelegate = self.originalDelegate as? URLSessionTaskDelegate,
-               originalDelegate.responds(to: #selector(URLSessionTaskDelegate.urlSession(_:task:didReceive:completionHandler:))) {
-                originalDelegate.urlSession?(session, task: task, didReceive: challenge, completionHandler: completionHandler)
-            } else {
-                // Fallback to session-level challenge if task-level not implemented
-                self.handleSessionChallenge(session: session, challenge: challenge, completionHandler: completionHandler)
-            }
         }
     }
     
@@ -526,8 +251,74 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
             )
         }
     }
+}
 
-    // MARK: - Private Helper Methods
+extension CustomHTTPProtocol: URLSessionDataDelegate {
+    public func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else { return }
+            Debug.print(#function)
+
+            self.client?.urlProtocol(self, wasRedirectedTo: request, redirectResponse: response)
+            self.response = response
+            completionHandler(request)
+        }
+    }
+
+    public func urlSession(
+        _: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else { return }
+            Debug.print(#function)
+
+            if let response = response as? HTTPURLResponse, let request = dataTask.originalRequest {
+                self.cachePolicy = CacheHelper.cacheStoragePolicy(for: request, and: response)
+            }
+
+            DebugSwift.Network.shared.delegate?.urlSession(
+                self,
+                didReceive: response
+            )
+            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: self.cachePolicy)
+            self.response = response as? HTTPURLResponse
+            completionHandler(.allow)
+        }
+    }
+
+    public func urlSession(_: URLSession, dataTask _: URLSessionDataTask, didReceive data: Data) {
+        threadOperator?.execute { [weak self] in
+            guard let self else { return }
+            Debug.print(#function)
+
+            var hasAddedData = false
+            if self.cachePolicy == .allowed {
+                self.data.append(data)
+                hasAddedData = true
+            }
+
+            DebugSwift.Network.shared.delegate?.urlSession(
+                self,
+                didReceive: data
+            )
+            self.client?.urlProtocol(self, didLoad: data)
+            self.didReceiveData = true
+            if prevUrl == response?.url, prevStartTime == startTime {
+                if !hasAddedData { self.data.append(data) }
+            } else {
+                self.data = data
+            }
+        }
+    }
 
     private func canRetry(error: NSError) -> Bool {
         guard error.code == Int(CFNetworkErrors.cfurlErrorNetworkConnectionLost.rawValue),
@@ -557,6 +348,150 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
             return "reloadRevalidatingCacheData"
         default:
             return "reloadIgnoringCacheData"
+        }
+    }
+
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        threadOperator?.execute { [weak self] in
+            guard let self else { return }
+            if let error {
+                self.error = error
+                if self.canRetry(error: error as NSError), let request = task.originalRequest {
+                    self.didRetry = true
+                    self.dataTask = session.dataTask(with: request)
+                    self.dataTask?.resume()
+                    return
+                }
+                DebugSwift.Network.shared.delegate?.urlSession(
+                    self,
+                    didFailWithError: error
+                )
+                self.client?.urlProtocol(self, didFailWithError: error)
+                return
+            }
+
+            DebugSwift.Network.shared.delegate?.didFinishLoading(self)
+            self.client?.urlProtocolDidFinishLoading(self)
+
+            if self.cachePolicy == .allowed {
+                URLCache.customHttp.storeIfNeeded(for: task, data: self.data)
+            }
+        }
+    }
+}
+
+extension CustomHTTPProtocol: URLSessionTaskDelegate {
+    public func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else { return }
+            Debug.print(#function)
+
+            DebugSwift.Network.shared.delegate?.urlSession(
+                self,
+                session,
+                task: task,
+                didSendBodyData: bytesSent,
+                totalBytesSent: totalBytesSent,
+                totalBytesExpectedToSend: totalBytesExpectedToSend
+            )
+        }
+    }
+    
+    // MARK: - Authentication Challenge Forwarding (Fix for issue #240)
+    
+    public func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            
+            Debug.print(#function)
+            
+            // Forward to original delegate if available and implements the method
+            if let originalDelegate = self.originalDelegate,
+               originalDelegate.responds(to: #selector(URLSessionDelegate.urlSession(_:didReceive:completionHandler:))) {
+                originalDelegate.urlSession?(session, didReceive: challenge, completionHandler: completionHandler)
+            } else {
+                // Default handling if no original delegate
+                completionHandler(.performDefaultHandling, nil)
+            }
+        }
+    }
+    
+    public func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            
+            Debug.print(#function)
+            
+            // Forward to original delegate if available and implements the method
+            if let originalDelegate = self.originalDelegate as? URLSessionTaskDelegate,
+               originalDelegate.responds(to: #selector(URLSessionTaskDelegate.urlSession(_:task:didReceive:completionHandler:))) {
+                originalDelegate.urlSession?(session, task: task, didReceive: challenge, completionHandler: completionHandler)
+            } else {
+                // Fallback to session-level challenge if task-level not implemented
+                self.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+            }
+        }
+    }
+    
+    public func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willBeginDelayedRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLSession.DelayedRequestDisposition, URLRequest?) -> Void
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else {
+                completionHandler(.continueLoading, nil)
+                return
+            }
+            
+            Debug.print(#function)
+            
+            // Forward to original delegate if available and implements the method
+            if let originalDelegate = self.originalDelegate as? URLSessionTaskDelegate,
+               originalDelegate.responds(to: #selector(URLSessionTaskDelegate.urlSession(_:task:willBeginDelayedRequest:completionHandler:))) {
+                originalDelegate.urlSession?(session, task: task, willBeginDelayedRequest: request, completionHandler: completionHandler)
+            } else {
+                completionHandler(.continueLoading, nil)
+            }
+        }
+    }
+    
+    public func urlSession(
+        _ session: URLSession,
+        taskIsWaitingForConnectivity task: URLSessionTask
+    ) {
+        threadOperator?.execute { [weak self] in
+            guard let self else { return }
+            
+            Debug.print(#function)
+            
+            // Forward to original delegate if available and implements the method
+            if let originalDelegate = self.originalDelegate as? URLSessionTaskDelegate,
+               originalDelegate.responds(to: #selector(URLSessionTaskDelegate.urlSession(_:taskIsWaitingForConnectivity:))) {
+                originalDelegate.urlSession?(session, taskIsWaitingForConnectivity: task)
+            }
         }
     }
 }
