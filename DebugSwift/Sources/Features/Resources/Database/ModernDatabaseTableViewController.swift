@@ -19,6 +19,7 @@ final class ModernDatabaseTableViewController: BaseController {
     private var filteredRows: [[Any?]] = []
     private var currentPage = 0
     private let pageSize = 100
+    private var totalRowCount = 0
     private var sortColumn: String?
     private var sortAscending = true
     private var columnFilters: [String: String] = [:]
@@ -198,6 +199,14 @@ final class ModernDatabaseTableViewController: BaseController {
         setup()
         loadTableData()
     }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let visibleColumns = columns.filter { !hiddenColumns.contains($0) }
+        guard !visibleColumns.isEmpty else { return }
+        let width = CGFloat(visibleColumns.count) * columnWidth
+        mainScrollView.contentSize = CGSize(width: width, height: mainScrollView.bounds.height)
+    }
 }
 
 // MARK: - Setup
@@ -347,6 +356,7 @@ private extension ModernDatabaseTableViewController {
 
         columns = result.columns
         allRows = result.rows
+        totalRowCount = SQLiteManager.shared.getRowCount(from: database.path, table: table.name)
         applyFilters()
 
         setupHeader()
@@ -414,8 +424,6 @@ private extension ModernDatabaseTableViewController {
         contentWidthConstraint?.isActive = false
         contentWidthConstraint = tableView.widthAnchor.constraint(equalToConstant: width)
         contentWidthConstraint?.isActive = true
-
-        mainScrollView.contentSize = CGSize(width: width, height: 0)
     }
 
     func applyFilters() {
@@ -447,15 +455,14 @@ private extension ModernDatabaseTableViewController {
     }
 
     func updateStats() {
-        let totalRows = table.rowCount
         let showing = filteredRows.count
         let filtered = columnFilters.isEmpty ? "" : " (filtered)"
 
-        statsLabel.text = "\(showing)/\(totalRows) rows\(filtered) • \(columns.count) cols"
+        statsLabel.text = "\(showing)/\(totalRowCount) rows\(filtered) • \(columns.count) cols"
     }
 
     func updatePageControl() {
-        let totalPages = max(1, (table.rowCount + pageSize - 1) / pageSize)
+        let totalPages = max(1, (totalRowCount + pageSize - 1) / pageSize)
         pageLabel.text = "Page \(currentPage + 1) of \(totalPages)"
         prevButton.isEnabled = currentPage > 0
         nextButton.isEnabled = currentPage < totalPages - 1
@@ -681,25 +688,41 @@ private extension ModernDatabaseTableViewController {
     }
 
     func deleteRow(at rowIndex: Int) {
-        guard let primaryKeyColumn = table.columns.first(where: { $0.isPrimaryKey })?.name,
-              let primaryKeyIndex = columns.firstIndex(of: primaryKeyColumn),
-              rowIndex < filteredRows.count else {
-            showAlert(with: "Cannot delete row without primary key")
-            return
-        }
+        guard rowIndex < filteredRows.count else { return }
 
         let row = filteredRows[rowIndex]
-        guard let primaryKeyValue = row[primaryKeyIndex] else {
-            showAlert(with: "Primary key value is missing")
-            return
+        let whereClause: String
+        let whereValues: [Any?]
+
+        if let primaryKeyColumn = table.columns.first(where: { $0.isPrimaryKey })?.name,
+           let primaryKeyIndex = columns.firstIndex(of: primaryKeyColumn) {
+            whereClause = "\"\(primaryKeyColumn)\" = ?"
+            whereValues = [row[primaryKeyIndex]]
+        } else {
+            // No explicit PK — match all columns to identify the row
+            var clauses: [String] = []
+            var vals: [Any?] = []
+            for (i, col) in columns.enumerated() where i < row.count {
+                if row[i] == nil {
+                    clauses.append("\"\(col)\" IS NULL")
+                } else {
+                    clauses.append("\"\(col)\" = ?")
+                    vals.append(row[i])
+                }
+            }
+            guard !clauses.isEmpty else {
+                showAlert(with: "Cannot delete row: no column data")
+                return
+            }
+            whereClause = clauses.joined(separator: " AND ")
+            whereValues = vals
         }
 
-        let whereClause = "\(primaryKeyColumn) = ?"
         let result = SQLiteManager.shared.executeDelete(
             path: database.path,
             table: table.name,
             whereClause: whereClause,
-            values: [primaryKeyValue]
+            values: whereValues
         )
 
         switch result {

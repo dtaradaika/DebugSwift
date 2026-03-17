@@ -427,25 +427,41 @@ private extension DatabaseTableViewController {
     }
     
     func deleteRow(at indexPath: IndexPath) {
-        guard let primaryKeyColumn = table.columns.first(where: { $0.isPrimaryKey })?.name,
-              let primaryKeyIndex = columns.firstIndex(of: primaryKeyColumn),
-              indexPath.row < rows.count else {
-            showAlert(with: "Cannot delete row without primary key")
-            return
-        }
-        
+        guard indexPath.row < rows.count else { return }
+
         let row = rows[indexPath.row]
-        guard let primaryKeyValue = row[primaryKeyIndex] else {
-            showAlert(with: "Primary key value is missing")
-            return
+        let whereClause: String
+        let whereValues: [Any?]
+
+        if let primaryKeyColumn = table.columns.first(where: { $0.isPrimaryKey })?.name,
+           let primaryKeyIndex = columns.firstIndex(of: primaryKeyColumn) {
+            whereClause = "\"\(primaryKeyColumn)\" = ?"
+            whereValues = [row[primaryKeyIndex]]
+        } else {
+            // No explicit PK — match all columns to identify the row
+            var clauses: [String] = []
+            var vals: [Any?] = []
+            for (i, col) in columns.enumerated() where i < row.count {
+                if row[i] == nil {
+                    clauses.append("\"\(col)\" IS NULL")
+                } else {
+                    clauses.append("\"\(col)\" = ?")
+                    vals.append(row[i])
+                }
+            }
+            guard !clauses.isEmpty else {
+                showAlert(with: "Cannot delete row: no column data")
+                return
+            }
+            whereClause = clauses.joined(separator: " AND ")
+            whereValues = vals
         }
-        
-        let whereClause = "\(primaryKeyColumn) = ?"
+
         let result = SQLiteManager.shared.executeDelete(
             path: database.path,
             table: table.name,
             whereClause: whereClause,
-            values: [primaryKeyValue]
+            values: whereValues
         )
         
         switch result {

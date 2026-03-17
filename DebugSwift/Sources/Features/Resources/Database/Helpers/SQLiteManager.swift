@@ -120,6 +120,12 @@ final class SQLiteManager: @unchecked Sendable {
         return columns
     }
     
+    func getRowCount(from path: String, table: String) -> Int {
+        guard let db = openDatabase(at: path, flags: SQLITE_OPEN_READONLY) else { return 0 }
+        defer { sqlite3_close(db) }
+        return getRowCount(for: table, db: db)
+    }
+
     private func getRowCount(for tableName: String, db: OpaquePointer?) -> Int {
         let query = "SELECT COUNT(*) FROM '\(tableName)'"
         var statement: OpaquePointer?
@@ -355,13 +361,15 @@ final class SQLiteManager: @unchecked Sendable {
                 case let doubleValue as Double:
                     sqlite3_bind_double(statement, paramIndex, doubleValue)
                 case let stringValue as String:
-                    sqlite3_bind_text(statement, paramIndex, stringValue, -1, nil)
+                    let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+                    sqlite3_bind_text(statement, paramIndex, stringValue, -1, transient)
                 case let dataValue as Data:
                     _ = dataValue.withUnsafeBytes { bytes in
                         sqlite3_bind_blob(statement, paramIndex, bytes.baseAddress, Int32(dataValue.count), nil)
                     }
                 default:
-                    sqlite3_bind_text(statement, paramIndex, "\(value)", -1, nil)
+                    let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+                    sqlite3_bind_text(statement, paramIndex, "\(value)", -1, transient)
                 }
             } else {
                 sqlite3_bind_null(statement, paramIndex)
