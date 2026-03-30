@@ -34,6 +34,12 @@ final class NetworkViewControllerDetail: BaseTableController {
         title = "Request Details"
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(
+                image: injectionSymbolImage(),
+                style: .plain,
+                target: self,
+                action: #selector(configureInjectionForEndpoint)
+            ),
+            UIBarButtonItem(
                 image: UIImage(systemName: "square.and.arrow.up"),
                 style: .plain,
                 target: self,
@@ -58,6 +64,169 @@ final class NetworkViewControllerDetail: BaseTableController {
                 action: #selector(replayButtonTapped)
             )
         ]
+    }
+
+    private func injectionSymbolImage() -> UIImage? {
+        if #available(iOS 16.0, *) {
+            return UIImage(systemName: "syringe")
+        }
+
+        return UIImage(systemName: "pencil")
+    }
+    
+    @objc private func configureInjectionForEndpoint() {
+        guard let url = model.url else { return }
+        
+        let alertController = UIAlertController(
+            title: "Configure Injection",
+            message: "Configure delay or failure injection for:\n\(url.host ?? url.absoluteString)",
+            preferredStyle: .actionSheet
+        )
+        
+        // Quick delay options
+        alertController.addAction(UIAlertAction(title: "Add 2s Delay", style: .default) { [weak self] _ in
+            self?.applyDelayToEndpoint(delay: 2.0)
+        })
+        
+        alertController.addAction(UIAlertAction(title: "Add 5s Delay", style: .default) { [weak self] _ in
+            self?.applyDelayToEndpoint(delay: 5.0)
+        })
+        
+        // Quick failure options
+        alertController.addAction(UIAlertAction(title: "Inject Timeout (100%)", style: .default) { [weak self] _ in
+            self?.applyFailureToEndpoint(type: .timeout)
+        })
+        
+        alertController.addAction(UIAlertAction(title: "Inject HTTP 404 (100%)", style: .default) { [weak self] _ in
+            self?.applyHTTPErrorToEndpoint(statusCode: 404)
+        })
+        
+        alertController.addAction(UIAlertAction(title: "Inject HTTP 500 (100%)", style: .default) { [weak self] _ in
+            self?.applyHTTPErrorToEndpoint(statusCode: 500)
+        })
+        
+        // Rewrite shortcut
+        alertController.addAction(UIAlertAction(title: "Create Rewrite Rule", style: .default) { [weak self] _ in
+            self?.showCreateRewriteRuleEditor()
+        })
+
+        // Advanced settings
+        alertController.addAction(UIAlertAction(title: "Advanced Settings...", style: .default) { [weak self] _ in
+            let settingsController = NetworkInjectionSettingsController()
+            self?.navigationController?.pushViewController(settingsController, animated: true)
+        })
+        
+        // Clear injection
+        alertController.addAction(UIAlertAction(title: "Clear All Injection", style: .destructive) { [weak self] _ in
+            self?.clearInjectionForEndpoint()
+        })
+        
+        alertController.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        
+        present(alertController, animated: true)
+    }
+    
+    private func applyDelayToEndpoint(delay: TimeInterval) {
+        guard let url = model.url else { return }
+        let urlPattern = url.host ?? url.absoluteString
+        
+        var config = NetworkInjectionManager.shared.getDelayConfig()
+        config.isEnabled = true
+        config.fixedDelay = delay
+        config.urlPatterns = [urlPattern]
+        config.httpMethods = model.method.map { [$0] } ?? []
+        
+        NetworkInjectionManager.shared.setDelayConfig(config)
+        
+        showAlert(
+            with: "Injection Applied",
+            title: String(format: "%.1fs delay applied to \(urlPattern)", delay),
+            rightButtonTitle: "OK"
+        )
+    }
+    
+    private func applyFailureToEndpoint(type: NetworkFailureConfig.FailureType) {
+        guard let url = model.url else { return }
+        let urlPattern = url.host ?? url.absoluteString
+        
+        var config = NetworkInjectionManager.shared.getFailureConfig()
+        config.isEnabled = true
+        config.failureRate = 1.0
+        config.failureType = type
+        config.urlPatterns = [urlPattern]
+        config.httpMethods = model.method.map { [$0] } ?? []
+        
+        NetworkInjectionManager.shared.setFailureConfig(config)
+        
+        showAlert(
+            with: "Injection Applied",
+            title: "Failure injection applied to \(urlPattern)",
+            rightButtonTitle: "OK"
+        )
+    }
+    
+    private func applyHTTPErrorToEndpoint(statusCode: Int) {
+        guard let url = model.url else { return }
+        let urlPattern = url.host ?? url.absoluteString
+        
+        var config = NetworkInjectionManager.shared.getFailureConfig()
+        config.isEnabled = true
+        config.failureRate = 1.0
+        config.failureType = .httpError(statusCode: nil)
+        config.urlPatterns = [urlPattern]
+        config.httpMethods = model.method.map { [$0] } ?? []
+        config.customStatusCodes = [statusCode]
+        
+        NetworkInjectionManager.shared.setFailureConfig(config)
+        
+        showAlert(
+            with: "Injection Applied",
+            title: "HTTP \(statusCode) error injection applied to \(urlPattern)",
+            rightButtonTitle: "OK"
+        )
+    }
+    
+    private func clearInjectionForEndpoint() {
+        var delayConfig = NetworkInjectionManager.shared.getDelayConfig()
+        delayConfig.isEnabled = false
+        NetworkInjectionManager.shared.setDelayConfig(delayConfig)
+        
+        var failureConfig = NetworkInjectionManager.shared.getFailureConfig()
+        failureConfig.isEnabled = false
+        NetworkInjectionManager.shared.setFailureConfig(failureConfig)
+        
+        showAlert(
+            with: "Injection Cleared",
+            title: "All network injection has been disabled",
+            rightButtonTitle: "OK"
+        )
+    }
+
+    private func showCreateRewriteRuleEditor() {
+        let initialURLPattern = model.url?.absoluteString ?? ""
+        let initialResponseBody = (model.decryptedResponseData ?? model.responseData)?.formattedString() ?? ""
+        let initialStatusCode = model.statusCode.flatMap { Int($0) }
+        let initialRule = ResponseBodyRewriteRule(
+            urlPattern: initialURLPattern,
+            responseBody: initialResponseBody,
+            responseStatusCode: initialStatusCode
+        )
+
+        let editor = RewriteRuleEditViewController(rule: initialRule) { [weak self] updatedRule in
+            self?.appendRewriteRule(updatedRule)
+        }
+        navigationController?.pushViewController(editor, animated: true)
+    }
+
+    private func appendRewriteRule(_ rule: ResponseBodyRewriteRule) {
+        var config = NetworkInjectionManager.shared.getRewriteConfig()
+        config.rules.append(rule)
+        NetworkInjectionManager.shared.setRewriteConfig(config)
+        showAlert(
+            with: "Rewrite rule created for this request",
+            title: "Rewrite Rule Added",
+            rightButtonTitle: "OK"
+        )
     }
 
     private func setup() {
@@ -85,6 +254,9 @@ final class NetworkViewControllerDetail: BaseTableController {
         tableView.register(DetailNavigationCell.self, forCellReuseIdentifier: "DetailNavigationCell")
         tableView.separatorStyle = .singleLine
         tableView.separatorColor = .darkGray
+        
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress))
+        tableView.addGestureRecognizer(longPress)
     }
 
     // MARK: - UITableViewDataSource
@@ -125,6 +297,8 @@ final class NetworkViewControllerDetail: BaseTableController {
         switch item.action {
         case .showRequestHeaders:
             showHeaders(model.requestHeaderFields, title: "Request Headers")
+        case .showRequestQueryParams:
+            showHeaders(parsedRequestQueryParams(), title: "Request Query Params")
         case .showResponseHeaders:
             showHeaders(model.responseHeaderFields, title: "Response Headers")
         case .showRequestBody:
@@ -138,6 +312,21 @@ final class NetworkViewControllerDetail: BaseTableController {
         case .none:
             break
         }
+    }
+    
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        
+        let point = gesture.location(in: tableView)
+        guard let indexPath = tableView.indexPathForRow(at: point) else { return }
+        
+        let item = filteredSections[indexPath.section].items[indexPath.row]
+        guard item.type == .info,
+              let value = item.value,
+              !value.isEmpty else { return }
+        
+        UIPasteboard.general.string = value
+        showToast(message: "Copied to clipboard")
     }
 
     private func showHeaders(_ headers: [String: Any]?, title: String) {
@@ -154,6 +343,25 @@ final class NetworkViewControllerDetail: BaseTableController {
         let vc = RawBodyViewController(data: data, headers: headers, title: title, isRequest: isRequest)
         navigationController?.pushViewController(vc, animated: true)
     }
+
+    private func parsedRequestQueryParams() -> [String: Any]? {
+        let queryItems = model.url
+            .flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
+        guard !queryItems.isEmpty else { return nil }
+
+        var params: [String: Any] = [:]
+        var duplicateKeyCounter: [String: Int] = [:]
+
+        for item in queryItems {
+            let count = duplicateKeyCounter[item.name, default: 0]
+            duplicateKeyCounter[item.name] = count + 1
+
+            let key = count == 0 ? item.name : "\(item.name) [\(count + 1)]"
+            params[key] = item.value ?? ""
+        }
+
+        return params
+    }
 }
 
 // MARK: - Detail Section Models
@@ -166,6 +374,7 @@ extension NetworkViewControllerDetail {
     
     enum ItemAction {
         case showRequestHeaders
+        case showRequestQueryParams
         case showResponseHeaders
         case showRequestBody
         case showRequestBodyRaw
@@ -247,6 +456,12 @@ extension NetworkViewControllerDetail {
             var requestItems: [DetailItem] = [
                 DetailItem(title: "Request Headers", action: .showRequestHeaders, badge: "\(requestHeadersCount)"),
             ]
+
+            let queryItems = model.url
+                .flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
+            if !queryItems.isEmpty {
+                requestItems.append(DetailItem(title: "Request Query Params", action: .showRequestQueryParams, badge: "\(queryItems.count)"))
+            }
             
             if let requestData = model.requestData, !requestData.isEmpty {
                 let bodyCount = countBodyItems(data: requestData)
@@ -396,12 +611,18 @@ extension NetworkViewControllerDetail {
     }
 
     @objc private func copyCurlButtonTapped() {
-        let curlCommand = """
-            curl -X \(model.method ?? "") \\
-                 -H "\(model.requestHeaderFields?.formattedCurlString() ?? "")" \\
-                 -d "\(model.requestData?.formattedCurlString() ?? "")" \\
-                 \(model.url?.absoluteString ?? "")
-        """
+        var curlCommand = "curl -X \(model.method ?? "GET")"
+        if let headers = model.requestHeaderFields, !headers.isEmpty {
+            for (key, value) in headers where !key.isEmpty {
+                curlCommand += " \\\n     -H '\("\(key): \(value)".escapedForCurl())'"
+            }
+        }
+        if let body = model.requestData?.formattedCurlString(), !body.isEmpty {
+            curlCommand += " \\\n     -d '\(body)'"
+        }
+        if let url = model.url?.absoluteString, !url.isEmpty {
+            curlCommand += " \\\n     '\(url.escapedForCurl())'"
+        }
         UIPasteboard.general.string = curlCommand
         showToast(message: "cURL copied to clipboard")
     }

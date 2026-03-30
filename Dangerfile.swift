@@ -44,7 +44,6 @@ internal class Validator {
         checkSize()
         checkDescription()
         checkUnitTest()
-        checkTitle()
         checkAssignee()
         checkModifiedFiles()
         checkFails()
@@ -120,18 +119,6 @@ fileprivate extension Validator {
         UnitTestValidator.shared.validate()
     }
 
-    func checkTitle() {
-        let result = prTitle.range(
-            of: #"\[[A-zÀ-ú0-9 ]*\][A-zÀ-ú0-9- ]+"#,
-            options: .regularExpression
-        ) != nil
-
-        if !result {
-            let message = "The PR title should be: [<i>Feature or Flow</i>] <i>What flow was done</i>"
-            warn(message)
-        }
-    }
-
     func checkAssignee() {
         if danger.github.pullRequest.assignee == nil {
             warn("Please assign yourself to the PR.")
@@ -159,16 +146,6 @@ fileprivate extension Validator {
         """
         The PR added \(additions) and removed \(deletions) lines. \(changedFiles) file(s) changed.
         """
-
-        // TODO: - Add PR documentation link
-        // let seeOurDocumentation =
-        // """
-        // Documentation: \
-        // <a href=''> \
-        // Link</a>
-        // """
-
-        // message(seeOurDocumentation)
         message(overview)
     }
 }
@@ -216,17 +193,9 @@ fileprivate extension UnitTestValidator {
     }
 
     func checkUnitTestCoverage() {
-        // Temporarily disabled due to xcresult format incompatibility with Xcode 16.4+
-        // Error: XCResultStorage.ResultBundleFactory.Error - Failed to read metadata
-        // The DangerSwiftCoverage plugin calls fail() internally (doesn't throw), causing CI to fail
-        // TODO: Re-enable when DangerSwiftCoverage supports Xcode 16.4+ or migrate to alternative
-        
-        warn("⚠️ Code coverage check is temporarily disabled due to xcresult format incompatibility. Please verify coverage manually in Xcode.")
-        
-        // Coverage.xcodeBuildCoverage(
-        //     .xcresultBundle("Example/fastlane/test_output/Example.xcresult"),
-        //     minimumCoverage: 70,
-        //     excludedTargets: ["DangerSwiftCoverageTests.xctest"]
-        // )
+        Coverage.xcodeBuildCoverage(
+            .xcresultBundle("Example/fastlane/test_output/Example.xcresult"),
+            minimumCoverage: 70
+        )
     }
 }

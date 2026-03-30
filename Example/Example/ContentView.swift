@@ -27,23 +27,23 @@ struct ContentView: View {
                     }
                     .padding(.vertical, 4)
                 }
-
-                NavigationLink(destination: LeakView()) {
+                
+                NavigationLink(destination: NetworkInjectionExampleView()) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Memory Leak Demo")
+                        Text("Network Injection Testing")
                             .font(.headline)
-                        Text("Test memory leak detection")
+                        Text("Test delay and failure injection for network requests")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     .padding(.vertical, 4)
                 }
 
-                NavigationLink(destination: ThreadCheckerTestView()) {
+                NavigationLink(destination: LeakView()) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("ThreadChecker Test Suite")
+                        Text("Memory Leak Demo")
                             .font(.headline)
-                        Text("Test thread safety violations")
+                        Text("Test memory leak detection")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -77,6 +77,17 @@ struct ContentView: View {
                         Text("🌐 Google WebView")
                             .font(.headline)
                         Text("Test WebKit integration with controls")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                NavigationLink(destination: DeepLinkTestView(url: URL(string: "debugswift://test?id=123"))) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("🔗 Deep Link Test View")
+                            .font(.headline)
+                        Text("Test deep link handling interface")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

@@ -6,6 +6,7 @@
 //
 
 import UIKit
+import CoreData
 
 extension DebugSwift {
     public class Network: @unchecked Sendable {
@@ -14,7 +15,15 @@ extension DebugSwift {
             // Private initializer for singleton
         }
         
+        /// You can use exact URL (literal):
+        /// ["https://api.example.com"]
+        /// or a wildcard
+        /// ["https://api.example.com/v1/orders/\*", "https://\*.example.com"]
         public var ignoredURLs = [String]()
+        /// You can use exact URL (literal):
+        /// ["https://api.example.com"]
+        /// or a wildcard
+        /// ["https://api.example.com/v1/orders/\*", "https://\*.example.com"]
         public var onlyURLs = [String]()
         public var onlySchemes = CustomHTTPProtocolURLScheme.allCases.filter { $0 != .ws && $0 != .wss }
         public var delegate: CustomHTTPProtocolDelegate?
@@ -81,6 +90,143 @@ extension DebugSwift {
         /// Get detailed threshold logs
         public func getThresholdLogs() -> String {
             NetworkThresholdTracker.shared.getDetailedLogs()
+        }
+        
+        // MARK: - Network Injection API
+        
+        /// Enable request delay injection with a fixed delay
+        /// - Parameters:
+        ///   - delay: Fixed delay in seconds
+        ///   - urlPatterns: Optional URL patterns to match (empty means all URLs)
+        ///   - httpMethods: Optional HTTP methods to apply delay to (empty means all methods)
+        public func enableRequestDelay(
+            _ delay: TimeInterval,
+            urlPatterns: [String] = [],
+            httpMethods: [String] = []
+        ) {
+            let config = RequestDelayConfig(
+                isEnabled: true,
+                fixedDelay: delay,
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            )
+            NetworkInjectionManager.shared.setDelayConfig(config)
+        }
+        
+        /// Enable request delay injection with a random delay range
+        /// - Parameters:
+        ///   - minDelay: Minimum delay in seconds
+        ///   - maxDelay: Maximum delay in seconds
+        ///   - urlPatterns: Optional URL patterns to match (empty means all URLs)
+        ///   - httpMethods: Optional HTTP methods to apply delay to (empty means all methods)
+        public func enableRequestDelay(
+            min minDelay: TimeInterval,
+            max maxDelay: TimeInterval,
+            urlPatterns: [String] = [],
+            httpMethods: [String] = []
+        ) {
+            let config = RequestDelayConfig(
+                isEnabled: true,
+                fixedDelay: nil,
+                minDelay: minDelay,
+                maxDelay: maxDelay,
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            )
+            NetworkInjectionManager.shared.setDelayConfig(config)
+        }
+        
+        /// Disable request delay injection
+        public func disableRequestDelay() {
+            var config = NetworkInjectionManager.shared.getDelayConfig()
+            config.isEnabled = false
+            NetworkInjectionManager.shared.setDelayConfig(config)
+        }
+        
+        /// Enable network failure injection
+        /// - Parameters:
+        ///   - failureRate: Failure rate from 0.0 to 1.0 (1.0 = 100% failure)
+        ///   - failureType: Type of failure to inject
+        ///   - urlPatterns: Optional URL patterns to match (empty means all URLs)
+        ///   - httpMethods: Optional HTTP methods to apply failure to (empty means all methods)
+        public func enableFailureInjection(
+            failureRate: Double = 0.5,
+            failureType: NetworkFailureConfig.FailureType = .timeout,
+            urlPatterns: [String] = [],
+            httpMethods: [String] = []
+        ) {
+            let config = NetworkFailureConfig(
+                isEnabled: true,
+                failureRate: failureRate,
+                failureType: failureType,
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            )
+            NetworkInjectionManager.shared.setFailureConfig(config)
+        }
+        
+        /// Enable HTTP error injection with specific status codes
+        /// - Parameters:
+        ///   - failureRate: Failure rate from 0.0 to 1.0 (1.0 = 100% failure)
+        ///   - statusCodes: Array of HTTP status codes to randomly return
+        ///   - urlPatterns: Optional URL patterns to match (empty means all URLs)
+        ///   - httpMethods: Optional HTTP methods to apply failure to (empty means all methods)
+        public func enableHTTPErrorInjection(
+            failureRate: Double = 0.5,
+            statusCodes: [Int] = [400, 401, 403, 404, 500, 502, 503],
+            urlPatterns: [String] = [],
+            httpMethods: [String] = []
+        ) {
+            let config = NetworkFailureConfig(
+                isEnabled: true,
+                failureRate: failureRate,
+                failureType: .httpError(statusCode: nil),
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods,
+                customStatusCodes: statusCodes
+            )
+            NetworkInjectionManager.shared.setFailureConfig(config)
+        }
+        
+        /// Disable network failure injection
+        public func disableFailureInjection() {
+            var config = NetworkInjectionManager.shared.getFailureConfig()
+            config.isEnabled = false
+            NetworkInjectionManager.shared.setFailureConfig(config)
+        }
+        
+        /// Configure custom network injection settings
+        /// - Parameters:
+        ///   - delayConfig: Optional delay configuration
+        ///   - failureConfig: Optional failure configuration
+        ///   - rewriteConfig: Optional response body rewrite configuration
+        public func configureNetworkInjection(
+            delayConfig: RequestDelayConfig? = nil,
+            failureConfig: NetworkFailureConfig? = nil,
+            rewriteConfig: ResponseBodyRewriteConfig? = nil
+        ) {
+            if let delay = delayConfig {
+                NetworkInjectionManager.shared.setDelayConfig(delay)
+            }
+            if let failure = failureConfig {
+                NetworkInjectionManager.shared.setFailureConfig(failure)
+            }
+            if let rewrite = rewriteConfig {
+                NetworkInjectionManager.shared.setRewriteConfig(rewrite)
+            }
+        }
+        
+        /// Enable response body rewrite with per-URL rules (first match wins)
+        public func enableResponseBodyRewrite(rules: [ResponseBodyRewriteRule]) {
+            let config = ResponseBodyRewriteConfig(isEnabled: true, rules: rules)
+            NetworkInjectionManager.shared.setRewriteConfig(config)
+        }
+        
+        /// Disable response body rewrite
+        public func disableResponseBodyRewrite() {
+            var config = NetworkInjectionManager.shared.getRewriteConfig()
+            config.isEnabled = false
+            NetworkInjectionManager.shared.setRewriteConfig(config)
         }
         
         // MARK: - Network History Management
@@ -248,6 +394,60 @@ extension DebugSwift {
                 }
                 return (identifier, url)
             }
+        }
+        
+        // MARK: - Core Data Configuration
+        
+        /// Core Data persistent container for debugging
+        public var coreDataContainer: NSPersistentContainer? {
+            didSet {
+                if let container = coreDataContainer {
+                    Task { @MainActor in
+                        CoreDataManager.shared.configure(container: container)
+                    }
+                }
+            }
+        }
+        
+        /// Core Data managed object context for debugging
+        public var coreDataContext: NSManagedObjectContext? {
+            didSet {
+                if let context = coreDataContext {
+                    Task { @MainActor in
+                        CoreDataManager.shared.configure(context: context)
+                    }
+                }
+            }
+        }
+        
+        /// Multiple Core Data contexts with labels
+        public var coreDataContexts: [String: NSManagedObjectContext] = [:] {
+            didSet {
+                Task { @MainActor in
+                    CoreDataManager.shared.configure(contexts: coreDataContexts)
+                }
+            }
+        }
+        
+        /// Enable read-only mode for Core Data browser (default: false)
+        public var coreDataReadOnly: Bool = false
+        
+        /// Configure Core Data with a persistent container
+        /// - Parameter container: The NSPersistentContainer to debug
+        public func configureCoreData(container: NSPersistentContainer) {
+            coreDataContainer = container
+        }
+        
+        /// Configure Core Data with a managed object context
+        /// - Parameter context: The NSManagedObjectContext to debug
+        public func configureCoreData(context: NSManagedObjectContext) {
+            coreDataContext = context
+        }
+        
+        /// Configure Core Data with multiple contexts
+        /// - Parameter contexts: Dictionary of context labels and their NSManagedObjectContext instances
+        public func configureCoreData(contexts: [String: NSManagedObjectContext]) {
+            coreDataContexts = contexts
         }
     }
 }

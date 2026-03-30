@@ -94,7 +94,7 @@ final class SQLiteManager: @unchecked Sendable {
     
     private func getColumns(for tableName: String, db: OpaquePointer?) -> [DatabaseColumn] {
         var columns: [DatabaseColumn] = []
-        let query = "PRAGMA table_info('\(tableName)')"
+        let query = "PRAGMA table_info(\(quotedIdentifier(tableName)))"
         
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else {
@@ -127,7 +127,7 @@ final class SQLiteManager: @unchecked Sendable {
     }
 
     private func getRowCount(for tableName: String, db: OpaquePointer?) -> Int {
-        let query = "SELECT COUNT(*) FROM '\(tableName)'"
+        let query = "SELECT COUNT(*) FROM \(quotedIdentifier(tableName))"
         var statement: OpaquePointer?
         
         guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else {
@@ -163,9 +163,9 @@ final class SQLiteManager: @unchecked Sendable {
         let columns = getColumnNames(for: table, db: db)
         
         // Build query
-        var query = "SELECT * FROM '\(table)'"
+        var query = "SELECT * FROM \(quotedIdentifier(table))"
         if let orderBy = orderBy {
-            query += " ORDER BY '\(orderBy)' \(ascending ? "ASC" : "DESC")"
+            query += " ORDER BY \(quotedIdentifier(orderBy)) \(ascending ? "ASC" : "DESC")"
         }
         query += " LIMIT \(limit) OFFSET \(offset)"
         
@@ -218,7 +218,7 @@ final class SQLiteManager: @unchecked Sendable {
     
     private func getColumnNames(for table: String, db: OpaquePointer?) -> [String] {
         var columns: [String] = []
-        let query = "SELECT * FROM '\(table)' LIMIT 0"
+        let query = "SELECT * FROM \(quotedIdentifier(table)) LIMIT 0"
         
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else {
@@ -329,8 +329,12 @@ final class SQLiteManager: @unchecked Sendable {
     }
     
     func executeDelete(path: String, table: String, whereClause: String, values: [Any?]) -> QueryResult {
-        let query = "DELETE FROM '\(table)' WHERE \(whereClause)"
+        let query = "DELETE FROM \(quotedIdentifier(table)) WHERE \(whereClause)"
         return executeParameterizedQuery(path: path, query: query, values: values)
+    }
+
+    private func quotedIdentifier(_ identifier: String) -> String {
+        "\"\(identifier.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
     
     private func executeParameterizedQuery(path: String, query: String, values: [Any?]) -> QueryResult {

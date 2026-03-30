@@ -28,14 +28,33 @@ class FloatBallView: UIView {
     lazy var ballView: UIView = buildBallView()
 
     // MARK: - Storage
-    @AppStorage("debug_swift_float_ball_x") private static var savedX: Double = 20
-    @AppStorage("debug_swift_float_ball_y") private static var savedY: Double = (UIScreen.main.bounds.height / 2 - 80.0)
+    private static var savedX: Double {
+        get {
+            UserDefaults.standard.double(forKey: "debug_swift_float_ball_x") != 0 
+                ? UserDefaults.standard.double(forKey: "debug_swift_float_ball_x") 
+                : 20
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "debug_swift_float_ball_x")
+        }
+    }
+    
+    private static var savedY: Double {
+        get {
+            UserDefaults.standard.double(forKey: "debug_swift_float_ball_y") != 0 
+                ? UserDefaults.standard.double(forKey: "debug_swift_float_ball_y") 
+                : (UIScreen.main.bounds.height / 2 - 80.0)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "debug_swift_float_ball_y")
+        }
+    }
 
     var show = false {
         didSet {
-            updateText()
             guard oldValue != show else { return }
             if show {
+                label.text = "0"
                 WindowManager.window.addSubview(self)
                 layer.position = .init(
                     x: Self.savedX,
@@ -97,11 +116,18 @@ class FloatBallView: UIView {
 
     func animate(success: Bool) {
         guard isShowing else { return }
-
+        
+        // Debounce frequent animations
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(performAnimation(_:)), object: nil)
+        
         updateText()
-        startAnimation(text: success ? "🚀" : "❌")
+        perform(#selector(performAnimation(_:)), with: success, afterDelay: 0.1)
 
         if !success { ImpactFeedback.generate() }
+    }
+    
+    @objc private func performAnimation(_ success: NSNumber) {
+        startAnimation(text: success.boolValue ? "🚀" : "❌")
     }
     
     func animateWebSocket(connected: Bool) {
@@ -120,10 +146,18 @@ class FloatBallView: UIView {
     }
 
     func updateText() {
+        // Only update if showing to avoid unnecessary work
+        guard isShowing else { return }
+        
         let httpCount = HttpDatasource.shared.httpModels.count
         let webSocketCount = WebSocketDataSource.shared.getAllConnections().count
         let totalCount = httpCount + webSocketCount
-        label.text = .init(totalCount)
+        
+        // Only update if the count has actually changed
+        let newText = String(totalCount)
+        if label.text != newText {
+            label.text = newText
+        }
     }
 
     func reset() {

@@ -13,9 +13,14 @@ final class DatabaseBrowserViewModel {
     
     // MARK: - Properties
     
+    private let allowedTypes: Set<DatabaseType>?
     private(set) var databases: [DatabaseFile] = []
     private(set) var filteredDatabases: [DatabaseFile] = []
     private var searchText: String = ""
+
+    init(allowedTypes: Set<DatabaseType>? = nil) {
+        self.allowedTypes = allowedTypes
+    }
     
     // MARK: - Public Methods
     
@@ -110,6 +115,12 @@ final class DatabaseFileManager: @unchecked Sendable {
             databaseFiles.append(contentsOf: findDatabaseFiles(in: cachesPath))
         }
         
+        DebugSwift.Resources.shared.appGroupIdentifiers.forEach { identifier in
+            if let path = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)?.path {
+                databaseFiles.append(contentsOf: findDatabaseFiles(in: path))
+            }
+        }
+        
         // Search in tmp directory
         let tmpPath = NSTemporaryDirectory()
         databaseFiles.append(contentsOf: findDatabaseFiles(in: tmpPath))
@@ -171,7 +182,7 @@ struct DatabaseFile {
     }
 }
 
-enum DatabaseType {
+enum DatabaseType: Hashable {
     case sqlite
     case realm
     case coreData
@@ -200,6 +211,14 @@ enum DatabaseType {
     
     static func from(fileName: String) -> DatabaseType? {
         let lowercased = fileName.lowercased()
+
+        if lowercased.contains("datamodel") &&
+            (lowercased.hasSuffix(".sqlite") ||
+                lowercased.hasSuffix(".sqlite3") ||
+                lowercased.hasSuffix(".db") ||
+                lowercased.hasSuffix(".sqlitedb")) {
+            return .coreData
+        }
         
         if lowercased.hasSuffix(".sqlite") || 
            lowercased.hasSuffix(".sqlite3") ||
@@ -208,10 +227,8 @@ enum DatabaseType {
             return .sqlite
         } else if lowercased.hasSuffix(".realm") {
             return .realm
-        } else if lowercased.contains("datamodel") && lowercased.hasSuffix(".sqlite") {
-            return .coreData
         }
         
         return nil
     }
-} 
+}

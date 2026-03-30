@@ -167,7 +167,7 @@ final class NetworkViewController: BaseController, MainFeatureType {
             let success = notification.object as? Bool ?? false
             MainActor.assumeIsolated {
                 self?.reloadHttp(
-                    needScrollToEnd: self?.viewModel.reachEnd ?? true,
+                    needScrollToEnd: (self?.viewModel.isReachEnd ?? true) && self?.view.window != nil,
                     success: success
                 )
                 self?.updateHTTPStatistics()
@@ -201,10 +201,18 @@ final class NetworkViewController: BaseController, MainFeatureType {
         guard viewModel.reloadDataFinish else { return }
         guard currentMode == .http || currentMode == .webview else { return }
 
-        FloatViewManager.animate(success: success)
+        // Only animate if the float view is showing to avoid unnecessary work
+        if FloatViewManager.shared.ballView.isShowing {
+            FloatViewManager.animate(success: success)
+        }
+        
         viewModel.applyFilter(for: currentMode)
         applyAdvancedFilter()
-        tableView.reloadData()
+        
+        // Use batch updates for better performance
+        if tableView.window != nil {
+            tableView.reloadData()
+        }
 
         if needScrollToEnd {
             scrollToBottom()
@@ -271,6 +279,10 @@ final class NetworkViewController: BaseController, MainFeatureType {
     }
     
     private func updateHTTPStatistics() {
+        // Skip statistics update if not visible or not needed
+        guard currentMode == .http || currentMode == .webview else { return }
+        guard view.window != nil else { return }
+        
         // Use appropriate data based on current mode
         let requests = currentMode == .webview ? viewModel.webViewModels : viewModel.httpModels
         
@@ -489,9 +501,7 @@ final class NetworkViewController: BaseController, MainFeatureType {
         searchController.obscuresBackgroundDuringPresentation = false
         
         // Force search bar placement if available
-        if #available(iOS 16.0, *) {
-            navigationItem.preferredSearchBarPlacement = .stacked
-        }
+        navigationItem.preferredSearchBarPlacement = .stacked
         
         // Ensure search bar is active and visible
         definesPresentationContext = true
@@ -585,6 +595,20 @@ final class NetworkViewController: BaseController, MainFeatureType {
         
         switch currentMode {
         case .http, .webview:
+            // Add network injection settings button
+            let injectionButton = UIBarButtonItem(
+                image: injectionSymbolImage(),
+                style: .plain,
+                target: self,
+                action: #selector(showNetworkInjectionSettings)
+            )
+            let injectionManager = NetworkInjectionManager.shared
+            let isInjectionActive = injectionManager.getDelayConfig().isEnabled || 
+                                    injectionManager.getFailureConfig().isEnabled ||
+                                    injectionManager.getRewriteConfig().isEnabled
+            injectionButton.tintColor = isInjectionActive ? .systemOrange : .systemGray
+            rightBarButtons.append(injectionButton)
+            
             // Add encryption toggle button
             let encryptionButton = UIBarButtonItem(
                 image: UIImage(systemName: DebugSwift.Network.shared.isDecryptionEnabled ? "lock.open" : "lock"),
@@ -642,6 +666,19 @@ final class NetworkViewController: BaseController, MainFeatureType {
         }
         
         navigationItem.rightBarButtonItems = rightBarButtons
+    }
+
+    private func injectionSymbolImage() -> UIImage? {
+        if #available(iOS 16.0, *) {
+            return UIImage(systemName: "syringe")
+        }
+
+        return UIImage(systemName: "pencil")
+    }
+    
+    @objc private func showNetworkInjectionSettings() {
+        let settingsController = NetworkInjectionSettingsController()
+        navigationController?.pushViewController(settingsController, animated: true)
     }
     
     @objc private func showDeleteAlert() {
@@ -917,5 +954,13 @@ extension NetworkViewController: UITableViewDelegate, UITableViewDataSource {
             
             return UISwipeActionsConfiguration(actions: actions)
         }
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard currentMode == .http || currentMode == .webview else { return }
+        let offsetY = scrollView.contentOffset.y
+        let contentHeight = scrollView.contentSize.height
+        let visibleHeight = scrollView.frame.height
+        viewModel.isReachEnd = offsetY >= max(0, contentHeight - visibleHeight)
     }
 }
