@@ -42,4 +42,8 @@ class BaseControllerTests: XCTestCase {
         // Then
         XCTAssertTrue(navigationController.navigationBar.prefersLargeTitles)
     }
+    
+    func emptyTest() {
+        
+    }
 }
