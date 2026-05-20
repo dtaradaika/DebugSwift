@@ -67,6 +67,8 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
     private var prevUrl: URL?
     private var prevStartTime: Date?
     private var matchedRewriteRule: ResponseBodyRewriteRule?
+    private let reportQueue = DispatchQueue(label: "com.debugswift.http-protocol.report")
+    private var didReport = false
 
     private var threadOperator: ThreadOperator?
     
@@ -144,6 +146,10 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         
         // Resolve rewrite rule once per request (first-match-wins order)
         matchedRewriteRule = NetworkInjectionManager.shared.matchingRewriteRule(for: request)
+        if let matchedRewriteRule, NetworkInjectionManager.shared.isRewriteShortCircuitEnabled() {
+            injectRewrittenResponse(using: matchedRewriteRule, for: request)
+            return
+        }
         
         threadOperator = ThreadOperator()
         startTime = Date()
@@ -182,6 +188,8 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         }
         """.data(using: .utf8) ?? Data()
         
+        guard markReportedIfNeeded() else { return }
+
         // Notify client of response
         if let response = httpResponse {
             self.response = response
@@ -216,11 +224,12 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
                 requestId: requestId,
                 cachePolicy: cachePolicy
             )
-            Self.report(data)
+            Self.report(data, matchedResponseModifier: false)
         }
     }
     
     private func injectNetworkError(_ error: Error) {
+        guard markReportedIfNeeded() else { return }
         self.error = error
         client?.urlProtocol(self, didFailWithError: error)
         
@@ -249,7 +258,57 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
                 requestId: requestId,
                 cachePolicy: cachePolicy
             )
-            Self.report(data)
+            Self.report(data, matchedResponseModifier: false)
+        }
+    }
+    
+    private func injectRewrittenResponse(using rule: ResponseBodyRewriteRule, for request: URLRequest) {
+        guard let url = request.url else { return }
+        
+        let rewrittenData = rule.responseBody.data(using: .utf8) ?? Data()
+        let statusCode = rule.responseStatusCode ?? 200
+        
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )
+        
+        guard markReportedIfNeeded() else { return }
+
+        if let response {
+            self.response = response
+            self.data = rewrittenData
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: rewrittenData)
+        }
+        
+        client?.urlProtocolDidFinishLoading(self)
+        
+        let method = request.httpMethod
+        let requestId = request.requestId
+        let cachePolicy = getCachePolicy(value: request.cachePolicy.rawValue)
+        let requestHeaderFields = request.allHTTPHeaderFields
+        let now = Date()
+        
+        Task { @MainActor in
+            let data = NetworkReportData(
+                url: url,
+                method: method,
+                requestData: nil,
+                responseData: rewrittenData,
+                statusCode: "\(statusCode)",
+                mineType: "application/json",
+                startTime: now,
+                endTime: now,
+                error: nil,
+                requestHeaderFields: requestHeaderFields,
+                responseHeaderFields: ["Content-Type": "application/json"],
+                requestId: requestId,
+                cachePolicy: cachePolicy
+            )
+            Self.report(data, matchedResponseModifier: true)
         }
     }
     
@@ -299,6 +358,9 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         let responseHeaderFields = headersToString(response?.allHeaderFields)
         let requestId = request.requestId
         let cachePolicy = getCachePolicy(value: request.cachePolicy.rawValue)
+        let matchedResponseModifier = matchedRewriteRule != nil
+
+        guard markReportedIfNeeded() else { return }
 
         Task { @MainActor in
             guard NetworkHelper.shared.isNetworkEnable else {
@@ -320,12 +382,20 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
                 requestId: requestId,
                 cachePolicy: cachePolicy
             )
-            Self.report(reportData)
+            Self.report(reportData, matchedResponseModifier: matchedResponseModifier)
+        }
+    }
+
+    private func markReportedIfNeeded() -> Bool {
+        reportQueue.sync {
+            guard !didReport else { return false }
+            didReport = true
+            return true
         }
     }
     
     @MainActor
-    private static func report(_ data: NetworkReportData) {
+    private static func report(_ data: NetworkReportData, matchedResponseModifier: Bool = false) {
         var model = HttpModel()
         model.url = data.url
         model.method = data.method
@@ -385,7 +455,11 @@ public final class CustomHTTPProtocol: URLProtocol, @unchecked Sendable {
         if HttpDatasource.shared.addHttpRequest(model) {
             NotificationCenter.default.post(
                 name: NSNotification.Name("reloadHttp_DebugSwift"),
-                object: model.isSuccess
+                object: nil,
+                userInfo: [
+                    "success": model.isSuccess,
+                    "matchedResponseModifier": matchedResponseModifier
+                ]
             )
         }
     }
@@ -456,14 +530,6 @@ extension CustomHTTPProtocol: URLSessionDataDelegate {
             Debug.print(#function)
             
             if self.matchedRewriteRule != nil {
-                if self.cachePolicy == .allowed {
-                    self.data.append(data)
-                } else if self.data.isEmpty {
-                    self.data = data
-                } else {
-                    self.data.append(data)
-                }
-                
                 self.didReceiveData = true
                 return
             }

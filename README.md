@@ -20,12 +20,14 @@ DebugSwift
 ---
 
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/a569b038-9058-4260-ae7c-47f3376cf629" />
+<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/35cbc0c4-4938-4b1f-bab2-69427aa66ffb" />
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/334ccefa-5951-494f-8faa-5f016d39f946" />
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/246cde3c-7a14-45de-ae01-e810c42d8e65" />
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/fadde188-dcba-46d8-9460-762f9be98bd6" />
 <img width="1970" height="1184" alt="Image" src="https://github.com/user-attachments/assets/8085e55c-a7e6-4e3b-8ceb-8fc7034480fe" />
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/a435a660-a4b2-4a3f-852e-a7bf0709e75e" />
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/15f34de1-214f-4bc3-95bc-b25efc2d383e" />
+<img width="1970" alt="Documentation Recorder" src="https://github.com/user-attachments/assets/3e008095-7b92-4df4-bcf0-de140795b6d0" />
 
 ## 📋 Table of Contents
 
@@ -49,6 +51,7 @@ DebugSwift
 - **Request Limiting:** Set thresholds to monitor and control API usage
 - **Smart Content:** Automatic JSON formatting with syntax highlighting
 - **Encryption Support:** Automatic decryption of encrypted API responses with AES-256/128 and custom decryptors
+- **Response Modifier:** Mock or modify any API responses in real time. Adjust the response body and status based on URL or patterns, enable or disable rules individually, import/export configurations via CSV, body editor, and generate rules from live network traffic.
 
 ### ⚡ Performance
 - **Real-time Metrics:** Monitor CPU, memory, and FPS in real-time
@@ -70,6 +73,7 @@ DebugSwift
 - **Animation Control:** Slow down animations for easier debugging
 - **View Borders:** Highlight view boundaries with colorization
 - **SwiftUI Render Tracking (Beta):** Automatically detect and visualize SwiftUI view re-renders with dedicated settings screen
+- **Documentation Recorder:** Record app interactions with annotated screenshots — taps shown as numbered circles, scrolls as arrows. Save, copy as grid, or share recordings
 
 ### 📁 Resources
 - **File Browser:** Navigate app sandbox and shared app group containers
@@ -77,6 +81,7 @@ DebugSwift
 - **Keychain:** Inspect keychain entries
 - **Database Browser:** SQLite and Realm database inspection
 - **Push Notifications:** Simulate push notifications with templates and test scenarios
+- **SwiftData Browser (iOS 17+):** Inspect registered SwiftData containers, browse models, inspect properties/relationships, edit values, and export JSON
 
 ## Installation & Setup
 
@@ -161,6 +166,85 @@ extension UIWindow {
         }
         #endif
     }
+}
+```
+
+### Open Debugger Programmatically
+
+You can get the debug menu as a standalone `UIViewController` and present it however you like — push, present modally, embed in your own navigation. No floating ball required.
+
+```swift
+// 1. Setup (without floating ball)
+#if DEBUG
+DebugSwift().setup()
+// Don't call .show() — no floating ball will appear
+#endif
+
+// 2. Get the debug view controller and present it yourself
+let debugVC = DebugSwift.debugViewController()
+
+// Push into your navigation stack
+navigationController?.pushViewController(debugVC, animated: true)
+
+// Or present modally
+let nav = UINavigationController(rootViewController: debugVC)
+present(nav, animated: true)
+```
+
+#### SwiftUI
+
+Wrap in a `UINavigationController` so the close button and dark nav bar match the FloatingView experience:
+
+```swift
+struct DebugViewControllerRepresentable: UIViewControllerRepresentable {
+    let onDismiss: () -> Void
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let debugVC = DebugSwift.debugViewController()
+
+        let closeButton = UIBarButtonItem(
+            image: UIImage(systemName: "xmark"),
+            style: .plain, target: context.coordinator,
+            action: #selector(Coordinator.close)
+        )
+        closeButton.tintColor = .white
+        debugVC.navigationItem.rightBarButtonItem = closeButton
+
+        let nav = UINavigationController(rootViewController: debugVC)
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithTransparentBackground()
+        appearance.backgroundColor = .black
+        nav.navigationBar.standardAppearance = appearance
+        nav.navigationBar.scrollEdgeAppearance = appearance
+        nav.navigationBar.compactAppearance = appearance
+        nav.overrideUserInterfaceStyle = .dark
+        return nav
+    }
+
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(onDismiss: onDismiss) }
+
+    class Coordinator: NSObject {
+        let onDismiss: () -> Void
+        init(onDismiss: @escaping () -> Void) { self.onDismiss = onDismiss }
+        @objc func close() { onDismiss() }
+    }
+}
+
+// Usage — fullScreenCover matches the FloatingView full-screen appearance
+@State private var showDebugger = false
+
+Button("Open Debugger") {
+    DebugSwift.debugViewControllerWillPresent()
+    showDebugger = true
+}
+// Use onDismiss: on fullScreenCover — not inside the representable — so the
+// floating ball is restored even when the sheet is dismissed via Escape/swipe.
+.fullScreenCover(isPresented: $showDebugger, onDismiss: {
+    DebugSwift.debugViewControllerDidDismiss()
+}) {
+    DebugViewControllerRepresentable(onDismiss: { showDebugger = false })
+        .ignoresSafeArea()
 }
 ```
 
@@ -408,6 +492,26 @@ debugSwift.setup(
 )
 ```
 
+### SwiftData Browser (iOS 17+)
+
+```swift
+import SwiftData
+
+// Define your model registrations
+let swiftDataModels: [SwiftDataModelRegistration] = [
+    .init(Trip.self),
+    .init(Accommodation.self)
+]
+
+// Register one or more containers
+DebugSwift.Resources.shared.configureSwiftData(contexts: [
+    .init(name: "Main", container: appModelContainer, models: swiftDataModels)
+])
+
+// Optional: lock browser editing
+DebugSwift.Resources.shared.swiftDataReadOnly = true
+```
+
 ### App Group Configuration
 
 ```swift
@@ -476,6 +580,14 @@ DebugSwift.SwiftUIRender.shared.clearPersistentOverlays()
 If you find DebugSwift helpful, please consider giving us a star on GitHub! Your support helps us continue improving and adding new features.
 
 [![GitHub stars](https://img.shields.io/github/stars/DebugSwift/DebugSwift.svg?style=social&label=Star)](https://github.com/DebugSwift/DebugSwift)
+
+<a href="https://starmapper.bruniaux.com/debugswift/debugswift">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://starmapper.bruniaux.com/api/map-image/debugswift/debugswift?theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://starmapper.bruniaux.com/api/map-image/debugswift/debugswift?theme=light" />
+    <img alt="StarMapper" src="https://starmapper.bruniaux.com/api/map-image/debugswift/debugswift" />
+  </picture>
+</a>
 
 ## Contributors
 
